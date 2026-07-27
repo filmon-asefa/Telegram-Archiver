@@ -1,0 +1,11 @@
+services:
+  archiver:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - PYTHONPATH=/app/backend
+    restart: unless-stopped

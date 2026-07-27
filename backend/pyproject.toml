@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "telegram-archiver"
+version = "0.1.0"
+description = "Full local backup of Telegram chats with real-time capture into SQLite"
+readme = "../README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+    "telethon>=1.36",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+telegram-archiver = "src.main:main"
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

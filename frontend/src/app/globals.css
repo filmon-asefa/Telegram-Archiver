@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+:root {
+  --bg-chat-list: #17212b;
+  --bg-chat-hover: #202b36;
+  --bg-chat-active: #2b5278;
+  --bg-message-out: #2b5278;
+  --bg-message-in: #182533;
+  --bg-header: #17212b;
+  --bg-input: #242f3d;
+  --bg-body: #0e1621;
+  --text-primary: #f5f5f5;
+  --text-secondary: #6c7883;
+  --text-accent: #6ab2f2;
+  --text-time: #5e7080;
+  --text-time-out: #a0c4e8;
+  --border: #0e1621;
+  --date-bg: #182533;
+  --scrollbar-thumb: #3a4654;
+  --link: #6ab2f2;
+}
+
+body {
+  background: var(--bg-body);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4a5a6a;
+}
+
+.date-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.date-separator span {
+  background: var(--date-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  user-select: none;
+}
+
+.message-bubble {
+  position: relative;
+  max-width: 65%;
+  padding: 6px 10px 4px 10px;
+  border-radius: 12px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.message-bubble.out {
+  background: var(--bg-message-out);
+  margin-left: auto;
+  border-bottom-right-radius: 4px;
+}
+
+.message-bubble.in {
+  background: var(--bg-message-in);
+  margin-right: auto;
+  border-bottom-left-radius: 4px;
+}
+
+.message-tail-out {
+  position: absolute;
+  bottom: 0;
+  right: -8px;
+  width: 0;
+  height: 0;
+  border-left: 8px solid var(--bg-message-out);
+  border-bottom: 8px solid transparent;
+}
+
+.message-tail-in {
+  position: absolute;
+  bottom: 0;
+  left: -8px;
+  width: 0;
+  height: 0;
+  border-right: 8px solid var(--bg-message-in);
+  border-bottom: 8px solid transparent;
+}
+
+.sender-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 1px;
+  line-height: 1.3;
+}
