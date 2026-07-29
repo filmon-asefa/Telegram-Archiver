@@ -460,7 +460,7 @@ export default function ChatView({
                 }
                 return (
                   <div
-                    key={`${item.msg.chat_id}-${item.msg.message_id}-${item.idx}`}
+                    key={`${item.msg.chat_id}-${item.msg.message_id}`}
                     id={`msg-${item.msg.message_id}`}
                   >
                     <MessageBubble
