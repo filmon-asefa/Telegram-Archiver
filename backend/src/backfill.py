@@ -23,6 +23,7 @@ from .telegram_client import (
     build_client,
     classify_media,
     download_with_retry,
+    extract_forward_info,
     sender_display_name,
     start_client,
 )
@@ -64,6 +65,8 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
                     chat_folder=chat_folder, sender_name=sender_name,
                 )
 
+            fwd = await extract_forward_info(message, client)
+
             db.insert_message(
                 chat_id=chat_id,
                 message_id=message.id,
@@ -74,6 +77,7 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
                 text=message.text,
                 media_type=media_type,
                 file_path=file_path,
+                **fwd,
             )
             highest_seen = max(highest_seen, message.id)
             count += 1
