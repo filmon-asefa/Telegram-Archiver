@@ -36,6 +36,10 @@ interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  is_forward: number;
+  fwd_from_author: string | null;
+  is_deleted: number;
+  deleted_at_unix: number | null;
 }
 
 interface DeletedMsg {
@@ -220,7 +224,7 @@ export default function ChatView({
   }, [chatId]);
 
   useEffect(() => {
-    if (!chatId || messages.length === 0) return;
+    if (!chatId) return;
     const interval = setInterval(async () => {
       const now = Math.floor(Date.now() / 1000);
       try {
@@ -239,7 +243,7 @@ export default function ChatView({
                 const wasAtBottom = container
                   ? container.scrollHeight - container.scrollTop - container.clientHeight < 80
                   : true;
-                const next = [...messagesRef.current, ...fresh];
+                const next = [...fresh, ...messagesRef.current];
                 messagesRef.current = next;
                 setMessages(next);
                 if (wasAtBottom) {
@@ -271,7 +275,13 @@ export default function ChatView({
           if (changes.deletions?.length > 0) {
             for (const d of changes.deletions) {
               if (d.chat_id === chatId) {
-                setMessages((prev) => prev.filter((m) => m.message_id !== d.message_id));
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.chat_id === d.chat_id && m.message_id === d.message_id
+                      ? { ...m, is_deleted: 1, deleted_at_unix: d.deleted_at_unix, text: d.old_text ?? m.text }
+                      : m
+                  )
+                );
                 setDeletedMsgs((prev) => [
                   {
                     message_id: d.message_id,
@@ -279,7 +289,7 @@ export default function ChatView({
                     old_text: d.old_text,
                     old_sender_name: d.old_sender_name,
                     old_date_unix: null,
-                    old_media_type: null,
+                    old_media_type: d.old_media_type,
                   },
                   ...prev,
                 ]);
@@ -290,7 +300,7 @@ export default function ChatView({
       } catch {
         // Poll failure is non-critical
       }
-    }, 5000);
+    }, 2000);
     return () => clearInterval(interval);
   }, [chatId, editCounts]);
 
@@ -610,6 +620,11 @@ export default function ChatView({
                 </div>
                 {d.old_sender_name && (
                   <div style={{ color: "var(--text-secondary)" }}>by {d.old_sender_name}</div>
+                )}
+                {d.old_media_type && (
+                  <div className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                    🗑 {d.old_media_type}
+                  </div>
                 )}
                 {d.old_text && (
                   <div className="mt-1 line-through opacity-70" style={{ color: "var(--text-primary)" }}>
