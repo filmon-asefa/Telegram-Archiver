@@ -8,6 +8,7 @@
     python -m src.main --media-only           # download media for messages missing it
     python -m src.main --listen               # live listener only
     python -m src.main --reorganize-media     # migrate media into human-readable folders
+    python -m src.main --resolve-forwards      # resolve forward source names for existing messages
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import logging
 
 from . import db
 from .backfill import run_backfill, run_media_download
+from .forward_fix import run_resolve
 from .listener import run_listener
 from .reorganize_media import reorganize_media
 
@@ -25,7 +27,11 @@ logger = logging.getLogger(__name__)
 
 async def run(do_backfill: bool, do_listen: bool, force: bool = False,
               chat_id: int | None = None, skip_media: bool = False,
-              media_only: bool = False) -> None:
+              media_only: bool = False, resolve_forwards: bool = False) -> None:
+    if resolve_forwards:
+        logger.info("=== Resolving forward authors ===")
+        await run_resolve()
+        return
     if media_only:
         logger.info("=== Downloading missing media ===")
         await run_media_download(chat_id=chat_id)
@@ -50,11 +56,17 @@ def main() -> None:
         action="store_true",
         help="Migrate media into YYYY/<Month>/DD/<Chat Name> [<id>]/<type>/HH-MM-SS_<Sender>_message_<id>.ext, then exit",
     )
+    parser.add_argument("--resolve-forwards", action="store_true", help="Resolve forward source names for existing messages")
     args = parser.parse_args()
 
     if args.reorganize_media:
         count = reorganize_media()
         logger.info("Reorganized %s media file(s).", count)
+        db.close()
+        return
+
+    if args.resolve_forwards:
+        asyncio.run(run(do_backfill=False, do_listen=False, resolve_forwards=True))
         db.close()
         return
 
