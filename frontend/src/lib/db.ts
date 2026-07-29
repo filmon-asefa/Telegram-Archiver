@@ -36,6 +36,10 @@ export interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  is_forward: number;
+  fwd_from_author: string | null;
+  is_deleted: number;
+  deleted_at_unix: number | null;
 }
 
 export interface Sender {
@@ -268,8 +272,8 @@ export function getChangesSince(unix: number) {
      FROM message_edits WHERE edited_at_unix > ? ORDER BY edited_at_unix`,
     [unix]
   );
-  const deletions = queryAll<{ chat_id: number; message_id: number; deleted_at_unix: number; old_text: string | null; old_sender_name: string | null }>(
-    `SELECT chat_id, message_id, deleted_at_unix, old_text, old_sender_name
+  const deletions = queryAll<{ chat_id: number; message_id: number; deleted_at_unix: number; old_text: string | null; old_sender_name: string | null; old_media_type: string | null }>(
+    `SELECT chat_id, message_id, deleted_at_unix, old_text, old_sender_name, old_media_type
      FROM message_deleted WHERE deleted_at_unix > ? ORDER BY deleted_at_unix`,
     [unix]
   );
