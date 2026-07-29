@@ -13,6 +13,10 @@ interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  is_forward: number;
+  fwd_from_author: string | null;
+  is_deleted: number;
+  deleted_at_unix: number | null;
 }
 
 interface Edit {
@@ -129,6 +133,7 @@ export default function MessageBubble({
   const hasMedia = !!message.file_path && !!message.media_type;
   const hasPendingMedia = !message.file_path && !!message.media_type;
   const hasText = !!message.text;
+  const isDeleted = message.is_deleted === 1;
   const shouldShowName = showSender && !isOutgoing && message.sender_name && !isUser;
   const wasEdited = editCount !== undefined && editCount > 0;
 
@@ -162,9 +167,21 @@ export default function MessageBubble({
     >
       <div
         className={`message-bubble ${isOutgoing ? "out" : "in"}`}
-        style={{ minWidth: (hasMedia || hasPendingMedia) ? "280px" : undefined }}
+        style={{ minWidth: isDeleted ? "320px" : (hasMedia || hasPendingMedia) ? "280px" : undefined }}
       >
         <div className={isOutgoing ? "message-tail-out" : "message-tail-in"} />
+
+        {message.is_forward === 1 && (
+          <div
+            className="flex items-center gap-1 text-xs mb-[2px]"
+            style={{ color: "var(--accent-color, #3390ec)" }}
+          >
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M1.5 13.5v-3a4 4 0 0 1 4-4h5.293l-2.147-2.146a.5.5 0 0 1 .708-.708l3 3a.5.5 0 0 1 0 .708l-3 3a.5.5 0 0 1-.708-.708L10.793 7.5H5.5a3 3 0 0 0-3 3v3a.5.5 0 0 1-1 0Z"/>
+            </svg>
+            <span className="font-medium">Forwarded from {message.fwd_from_author || "Unknown"}</span>
+          </div>
+        )}
 
         {shouldShowName && (
           <div
@@ -175,11 +192,11 @@ export default function MessageBubble({
           </div>
         )}
 
-        {hasMedia && (
+        {hasMedia && !isDeleted && (
           <MediaPreview filePath={message.file_path!} mediaType={message.media_type!} />
         )}
 
-        {hasPendingMedia && (
+        {!isDeleted && hasPendingMedia && (
           <div
             className="mt-1 flex items-center gap-2 text-xs rounded-lg px-3 py-2 opacity-50"
             style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}
@@ -189,48 +206,54 @@ export default function MessageBubble({
           </div>
         )}
 
-        {(hasText || (!hasMedia && !hasPendingMedia)) && (
-          <div className="flex items-end gap-2">
-            {hasText && (
-              <p
-                className="text-[14.5px] whitespace-pre-wrap break-words"
-                style={{ color: "var(--text-primary)" }}
-              >
-                {message.text}
-              </p>
-            )}
-            <span
-              className="text-[11px] whitespace-nowrap shrink-0 flex items-center gap-[2px] self-end pb-[1px]"
-              style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
-            >
-              {wasEdited && (
-                <span
-                  className="cursor-pointer hover:underline mr-[3px]"
-                  onClick={toggleEdits}
-                  title="View edit history"
-                >
-                  edited
-                </span>
+        <div className={`flex items-end gap-2 ${isDeleted ? "opacity-75" : ""}`}>
+          {isDeleted && (
+            <div className="w-full rounded-lg px-3 py-2 -mx-3 deleted-fade-in" style={{ background: "rgba(255,80,80,0.06)", borderLeft: "3px solid rgba(255,80,80,0.5)" }}>
+              {hasMedia && (
+                <div className="flex items-center gap-1.5 text-xs line-through opacity-60 mb-1" style={{ color: "var(--text-secondary)" }}>
+                  <span>{getMediaIcon(message.media_type!)}</span>
+                  <span className="truncate">{message.media_type}</span>
+                </div>
               )}
-              {formatTime(message.date_unix)}
-              {isOutgoing && <CheckMark />}
-            </span>
-          </div>
-        )}
+              {hasText && (
+                <div className="w-full line-through opacity-60" style={{ color: "var(--text-secondary, #888)" }}>
+                  <p className="text-[14.5px] whitespace-pre-wrap break-words">{message.text}</p>
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 text-[11px] mt-[3px]">
+                <span className="font-semibold uppercase tracking-wider" style={{ color: "rgba(255,80,80,0.8)" }}>Deleted</span>
+                <span className="line-through" style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}>{formatTime(message.date_unix)}</span>
+              </div>
+            </div>
+          )}
+          {!isDeleted && (
+            <>
+              {hasText && (
+                <p className="text-[14.5px] whitespace-pre-wrap break-words" style={{ color: "var(--text-primary)" }}>
+                  {message.text}
+                </p>
+              )}
+              <span
+                className="text-[11px] whitespace-nowrap shrink-0 flex items-center gap-[2px] self-end pb-[1px]"
+                style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
+              >
+                {wasEdited && (
+                  <span className="cursor-pointer hover:underline mr-[3px]" onClick={toggleEdits} title="View edit history">edited</span>
+                )}
+                {formatTime(message.date_unix)}
+                {isOutgoing && <CheckMark />}
+              </span>
+            </>
+          )}
+        </div>
 
-        {(hasMedia || hasPendingMedia) && !hasText && (
+        {(hasMedia || hasPendingMedia) && !hasText && !isDeleted && (
           <div
             className="text-[11px] text-right mt-[2px] flex items-center justify-end gap-[2px]"
             style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
           >
             {wasEdited && (
-              <span
-                className="cursor-pointer hover:underline mr-[3px]"
-                onClick={toggleEdits}
-                title="View edit history"
-              >
-                edited
-              </span>
+              <span className="cursor-pointer hover:underline mr-[3px]" onClick={toggleEdits} title="View edit history">edited</span>
             )}
             {formatTime(message.date_unix)}
             {isOutgoing && <CheckMark />}
