@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS messages (
     text TEXT,
     media_type TEXT,              -- 'photos' | 'videos' | 'voice' | 'documents' | 'audio' | 'stickers' | 'animations' | 'contacts' | 'locations' | 'polls' | 'other' | NULL
     file_path TEXT,
+    is_forward INTEGER NOT NULL DEFAULT 0,
+    fwd_from_chat_id INTEGER,
+    fwd_from_msg_id INTEGER,
+    fwd_from_date INTEGER,
+    fwd_from_author TEXT,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at_unix INTEGER,
     PRIMARY KEY (chat_id, message_id)
 );
 
@@ -79,6 +86,13 @@ CREATE TABLE IF NOT EXISTS message_snapshot (
     text TEXT,
     media_type TEXT,
     file_path TEXT,
+    is_forward INTEGER NOT NULL DEFAULT 0,
+    fwd_from_chat_id INTEGER,
+    fwd_from_msg_id INTEGER,
+    fwd_from_date INTEGER,
+    fwd_from_author TEXT,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at_unix INTEGER,
     snapshot_at_unix INTEGER NOT NULL,
     PRIMARY KEY (chat_id, message_id)
 );
@@ -103,9 +117,41 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     logger.info("Database ready at %s", db_path)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add forward columns to tables that might have been created before they existed."""
+    migrations = [
+        ("messages", "is_forward", "INTEGER NOT NULL DEFAULT 0"),
+        ("messages", "fwd_from_chat_id", "INTEGER"),
+        ("messages", "fwd_from_msg_id", "INTEGER"),
+        ("messages", "fwd_from_date", "INTEGER"),
+        ("messages", "fwd_from_author", "TEXT"),
+        ("message_snapshot", "is_forward", "INTEGER NOT NULL DEFAULT 0"),
+        ("message_snapshot", "fwd_from_chat_id", "INTEGER"),
+        ("message_snapshot", "fwd_from_msg_id", "INTEGER"),
+        ("message_snapshot", "fwd_from_date", "INTEGER"),
+        ("message_snapshot", "fwd_from_author", "TEXT"),
+    ]
+    for table, col, col_type in migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+            logger.info("Migrated: added %s.%s", table, col)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    # is_deleted / deleted_at_unix added later
+    for table in ("messages", "message_snapshot"):
+        for col, col_type in (("is_deleted", "INTEGER NOT NULL DEFAULT 0"), ("deleted_at_unix", "INTEGER")):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                logger.info("Migrated: added %s.%s", table, col)
+            except sqlite3.OperationalError:
+                pass
 
 
 def upsert_chat(chat_id: int, chat_name: str, chat_type: str) -> None:
@@ -149,14 +195,20 @@ def insert_message(
     text: Optional[str],
     media_type: Optional[str],
     file_path: Optional[str],
+    is_forward: bool = False,
+    fwd_from_chat_id: Optional[int] = None,
+    fwd_from_msg_id: Optional[int] = None,
+    fwd_from_date: Optional[int] = None,
+    fwd_from_author: Optional[str] = None,
 ) -> None:
     conn = get_connection()
     conn.execute(
         """
         INSERT OR IGNORE INTO messages
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
-             date_unix, text, media_type, file_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             date_unix, text, media_type, file_path,
+             is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             chat_id,
@@ -168,6 +220,11 @@ def insert_message(
             text,
             media_type,
             file_path,
+            int(is_forward),
+            fwd_from_chat_id,
+            fwd_from_msg_id,
+            fwd_from_date,
+            fwd_from_author,
         ),
     )
 
@@ -218,7 +275,9 @@ def save_message_snapshot(chat_id: int, message_id: int) -> None:
     """Save the current state of a message before it gets edited/deleted."""
     conn = get_connection()
     row = conn.execute(
-        "SELECT chat_id, message_id, sender_id, sender_name, is_outgoing, date_unix, text, media_type, file_path "
+        "SELECT chat_id, message_id, sender_id, sender_name, is_outgoing, date_unix, text, media_type, file_path, "
+        "is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author, "
+        "is_deleted, deleted_at_unix "
         "FROM messages WHERE chat_id = ? AND message_id = ?",
         (chat_id, message_id),
     ).fetchone()
@@ -229,8 +288,11 @@ def save_message_snapshot(chat_id: int, message_id: int) -> None:
         """
         INSERT OR REPLACE INTO message_snapshot
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
-             date_unix, text, media_type, file_path, snapshot_at_unix)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             date_unix, text, media_type, file_path,
+             is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author,
+             is_deleted, deleted_at_unix,
+             snapshot_at_unix)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (*row, int(time.time())),
     )
@@ -248,7 +310,12 @@ def record_edit(chat_id: int, message_id: int, old_text: str | None, new_text: s
 
 
 def record_deletion(chat_id: int, message_id: int) -> None:
-    """Record that a message was deleted, saving its last known state."""
+    """Record that a message was deleted, saving its last known state.
+
+    The message row is kept in the ``messages`` table but marked as
+    ``is_deleted = 1`` so the UI can show a "deleted" placeholder
+    instead of removing the message entirely.
+    """
     import time
     conn = get_connection()
     now = int(time.time())
@@ -264,11 +331,21 @@ def record_deletion(chat_id: int, message_id: int) -> None:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (chat_id, message_id, now, row[2], row[0], row[1], row[3]),
         )
+        conn.execute(
+            "UPDATE messages SET is_deleted = 1, deleted_at_unix = ? "
+            "WHERE chat_id = ? AND message_id = ?",
+            (now, chat_id, message_id),
+        )
     else:
         conn.execute(
             "INSERT INTO message_deleted (chat_id, message_id, deleted_at_unix) "
             "VALUES (?, ?, ?)",
             (chat_id, message_id, now),
+        )
+        conn.execute(
+            "UPDATE messages SET is_deleted = 1, deleted_at_unix = ? "
+            "WHERE chat_id = ? AND message_id = ?",
+            (now, chat_id, message_id),
         )
 
 
@@ -333,7 +410,7 @@ def get_changes_since(unix: int) -> dict:
         (unix,),
     ).fetchall()
     deletions = conn.execute(
-        "SELECT chat_id, message_id, deleted_at_unix, old_text, old_sender_name "
+        "SELECT chat_id, message_id, deleted_at_unix, old_text, old_sender_name, old_media_type "
         "FROM message_deleted WHERE deleted_at_unix > ? ORDER BY deleted_at_unix",
         (unix,),
     ).fetchall()
@@ -343,7 +420,7 @@ def get_changes_since(unix: int) -> dict:
             for e in edits
         ],
         "deletions": [
-            {"chat_id": d[0], "message_id": d[1], "deleted_at_unix": d[2], "old_text": d[3], "old_sender_name": d[4]}
+            {"chat_id": d[0], "message_id": d[1], "deleted_at_unix": d[2], "old_text": d[3], "old_sender_name": d[4], "old_media_type": d[5]}
             for d in deletions
         ],
     }
