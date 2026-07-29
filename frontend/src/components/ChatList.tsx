@@ -65,6 +65,8 @@ export default function ChatList() {
 
   useEffect(() => {
     fetchChats();
+    const interval = setInterval(() => fetchChats(), 3000);
+    return () => clearInterval(interval);
   }, [fetchChats]);
 
   useEffect(() => {
