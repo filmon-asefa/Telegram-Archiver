@@ -23,6 +23,7 @@ from .telegram_client import (
     build_client,
     classify_media,
     download_with_retry,
+    extract_forward_info,
     sender_display_name,
     start_client,
 )
@@ -75,6 +76,7 @@ def register_handlers(client) -> None:
 
             sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
             media_type = classify_media(message)
+            fwd = await extract_forward_info(message, client)
 
             _cid, _mid = chat_id, message.id
             _sid, _sname = sender_id, sender_name
@@ -96,6 +98,7 @@ def register_handlers(client) -> None:
                     text=_text,
                     media_type=_mtype,
                     file_path=None,
+                    **fwd,
                 )
                 db.set_last_synced_message_id(_cid, _mid)
                 db.commit()
@@ -157,12 +160,36 @@ def register_handlers(client) -> None:
     @client.on(events.MessageDeleted)
     async def delete_handler(event) -> None:
         try:
+            from telethon.utils import get_peer_id
+
             chat_id = event.chat_id
+            if chat_id is None:
+                update = getattr(event, 'original_update', None)
+                if update:
+                    peer = getattr(update, 'peer', None)
+                    if peer:
+                        chat_id = get_peer_id(peer)
+                    elif hasattr(update, 'channel_id') and update.channel_id:
+                        chat_id = int(f"-100{update.channel_id}")
+
+            if chat_id is None:
+                msg_id = event.deleted_ids[0]
+                row = db.get_connection().execute(
+                    "SELECT DISTINCT chat_id FROM messages WHERE message_id = ? LIMIT 1",
+                    (msg_id,),
+                ).fetchone()
+                if row:
+                    chat_id = row[0]
+                    logger.info("Resolved chat_id=%s from DB for deleted msg %s", chat_id, msg_id)
+
+            if chat_id is None:
+                logger.warning("MessageDeleted event without chat_id, skipped ids=%s", event.deleted_ids)
+                return
 
             def _write_del():
                 for msg_id in event.deleted_ids:
+                    db.save_message_snapshot(chat_id, msg_id)
                     db.record_deletion(chat_id, msg_id)
-                    db.delete_message(chat_id, msg_id)
                     logger.info("Deletion recorded chat=%s id=%s", chat_id, msg_id)
                 db.commit()
 
@@ -196,6 +223,7 @@ async def _initial_backfill(client) -> None:
                 try:
                     sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
                     media_type = classify_media(message)
+                    fwd = await extract_forward_info(message, client)
 
                     db.insert_message(
                         chat_id=chat_id,
@@ -207,6 +235,7 @@ async def _initial_backfill(client) -> None:
                         text=message.text,
                         media_type=media_type,
                         file_path=None,
+                        **fwd,
                     )
                     highest_seen = max(highest_seen, message.id)
                     count += 1
@@ -312,6 +341,7 @@ async def _catchup_loop(client) -> None:
                     try:
                         sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
                         media_type = classify_media(message)
+                        fwd = await extract_forward_info(message, client)
                         db.insert_message(
                             chat_id=chat_id,
                             message_id=message.id,
@@ -322,6 +352,7 @@ async def _catchup_loop(client) -> None:
                             text=message.text,
                             media_type=media_type,
                             file_path=None,
+                            **fwd,
                         )
                         highest_seen = max(highest_seen, message.id)
                         count += 1
