@@ -70,9 +70,9 @@ async def start_client(client: TelegramClient) -> None:
 async def download_with_retry(
     message: Message, media_dir: Path, chat_id: int,
     chat_folder: str | None = None, sender_name: str = "Unknown User",
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> Optional[str]:
-    """Download media for a message, retrying on flood waits. Returns local path or None."""
+    """Download media for a message, retrying on flood waits and transient failures. Returns local path or None."""
     media_type = classify_media(message) or "other"
     logger.info("[MEDIA] Sender:\n%s", sender_name)
     dest = get_storage_path(
@@ -85,20 +85,18 @@ async def download_with_retry(
         try:
             path = await asyncio.wait_for(
                 message.download_media(file=str(dest)),
-                timeout=120,
+                timeout=180,
             )
             if path:
                 logger.info("[MEDIA] Saved:\n%s", path)
             return path
         except asyncio.TimeoutError:
-            logger.warning("Timeout downloading media (attempt %s), skipping", attempt)
-            return None
+            logger.warning("Timeout downloading media (attempt %s/%s)", attempt, max_retries)
         except FloodWaitError as e:
-            logger.warning("Flood wait %ss downloading media (attempt %s)", e.seconds, attempt)
+            logger.warning("Flood wait %ss downloading media (attempt %s/%s)", e.seconds, attempt, max_retries)
             await asyncio.sleep(e.seconds + 1)
         except Exception:  # noqa: BLE001 - media download failures shouldn't crash the run
-            logger.exception("Failed to download media for chat=%s message=%s", chat_id, message.id)
-            return None
+            logger.exception("Failed to download media for chat=%s message=%s (attempt %s/%s)", chat_id, message.id, attempt, max_retries)
     logger.error("Giving up on media download for chat=%s message=%s", chat_id, message.id)
     return None
 
@@ -137,3 +135,45 @@ async def sender_display_name(message: Message, is_outgoing: bool = False) -> Tu
         name = "Unknown User"
 
     return message.sender_id, name
+
+
+async def extract_forward_info(message: Message, client: TelegramClient | None = None) -> dict:
+    """Extract forward metadata from a message.
+
+    Returns a dict with keys: is_forward, fwd_from_chat_id, fwd_from_msg_id,
+    fwd_from_date, fwd_from_author. All values default to None when
+    the message is not a forward.
+
+    When ``post_author`` is not set (most forwards) and *client* is
+    provided, the function will resolve the original sender/chat name
+    from ``from_id``.
+    """
+    fwd = message.fwd_from
+    if fwd is None:
+        return {
+            "is_forward": False,
+            "fwd_from_chat_id": None,
+            "fwd_from_msg_id": None,
+            "fwd_from_date": None,
+            "fwd_from_author": None,
+        }
+
+    from telethon.utils import get_peer_id
+
+    author = fwd.post_author
+    if author is None and client is not None and fwd.from_id is not None:
+        try:
+            entity = await client.get_entity(fwd.from_id)
+            first = getattr(entity, "first_name", None) or ""
+            last = getattr(entity, "last_name", None) or ""
+            author = f"{first} {last}".strip() or getattr(entity, "title", None) or getattr(entity, "username", None)
+        except Exception:
+            pass
+
+    return {
+        "is_forward": True,
+        "fwd_from_chat_id": get_peer_id(fwd.from_id) if fwd.from_id else None,
+        "fwd_from_msg_id": fwd.channel_post,
+        "fwd_from_date": int(fwd.date.timestamp()) if fwd.date else None,
+        "fwd_from_author": author,
+    }
