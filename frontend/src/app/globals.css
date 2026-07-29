@@ -111,3 +111,18 @@ body {
   margin-bottom: 1px;
   line-height: 1.3;
 }
+
+.deleted-fade-in {
+  animation: deletedFadeIn 0.35s ease-out both;
+}
+
+@keyframes deletedFadeIn {
+  0% {
+    opacity: 0.4;
+    background-color: transparent;
+    border-left-color: transparent;
+  }
+  100% {
+    opacity: 1;
+  }
+}
