@@ -86,10 +86,51 @@ export function queryAll<T>(sql: string, params?: (string | number | null)[]): T
   return rows as T[];
 }
 
+// Detect the actual DB schema. The backend auto-migrates on connect; until then
+// the frontend reader must degrade gracefully (no chat metadata / forum topics).
+function tableColumns(table: string): Set<string> {
+  try {
+    const db = getDb();
+    return new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((r) => r.name)
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function tableExists(name: string): boolean {
+  try {
+    const db = getDb();
+    const row = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name) as { name: string } | undefined;
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+const CHAT_COLS = tableColumns("chats");
+const MESSAGE_COLS = tableColumns("messages");
+const hasChatMeta = [
+  "username",
+  "description",
+  "participant_count",
+  "linked_chat_id",
+  "megagroup",
+  "broadcast",
+  "is_verified",
+  "forum",
+  "gigagroup",
+].every((c) => CHAT_COLS.has(c));
+const hasTopicId = MESSAGE_COLS.has("topic_id");
+const hasTopicsTable = tableExists("topics");
+
 const MESSAGE_COLUMNS = `m.chat_id, m.message_id, m.sender_id, m.sender_name, m.is_outgoing,
   m.date_unix, m.text, m.media_type, m.file_path, m.media_duration, m.media_group_id,
   m.is_forward, m.fwd_from_chat_id, m.fwd_from_msg_id, m.fwd_from_date, m.fwd_from_author,
-  m.reply_to_message_id, m.topic_id, m.is_deleted, m.deleted_at_unix, m.downloaded_at_unix,
+  m.reply_to_message_id, ${hasTopicId ? "m.topic_id" : "NULL AS topic_id"}, m.is_deleted, m.deleted_at_unix, m.downloaded_at_unix,
   (SELECT COUNT(*) FROM messages g
      WHERE g.chat_id = m.chat_id AND g.media_group_id IS NOT NULL AND g.media_group_id = m.media_group_id
   ) AS media_group_count`;
@@ -123,21 +164,25 @@ function queryOne<T>(sql: string, params?: (string | number | null)[]): T | unde
 type TopicFilter = number | "general";
 
 function topicWhere(topicId?: TopicFilter, alias = "m."): string {
-  if (topicId === undefined) return "";
+  if (!hasTopicId || topicId === undefined) return "";
   if (topicId === "general") return ` AND ${alias}topic_id IS NULL`;
   return ` AND ${alias}topic_id = ?`;
 }
 
+const CHAT_META_COLUMNS = hasChatMeta
+  ? `c.username, c.description, c.participant_count, c.linked_chat_id,
+     c.megagroup, c.broadcast, c.is_verified, c.forum, c.gigagroup`
+  : `NULL AS username, NULL AS description, NULL AS participant_count, NULL AS linked_chat_id,
+     0 AS megagroup, 0 AS broadcast, 0 AS is_verified, 0 AS forum, 0 AS gigagroup`;
+
 const CHAT_COLUMNS = `c.chat_id, c.chat_name, c.chat_type, c.last_synced_message_id,
-  c.username, c.description, c.participant_count, c.linked_chat_id,
-  c.megagroup, c.broadcast, c.is_verified, c.forum, c.gigagroup,
+  ${CHAT_META_COLUMNS},
   (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS message_count,
   (SELECT ${DELETED_PREVIEW} FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
   (SELECT date_unix FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_date`;
 
 const CHAT_COLUMNS_SEARCH = `c.chat_id, c.chat_name, c.chat_type, c.last_synced_message_id,
-  c.username, c.description, c.participant_count, c.linked_chat_id,
-  c.megagroup, c.broadcast, c.is_verified, c.forum, c.gigagroup,
+  ${CHAT_META_COLUMNS},
   (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS message_count,
   (SELECT ${DELETED_PREVIEW} FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
   (SELECT date_unix FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_date`;
@@ -173,7 +218,7 @@ export function getMessages(
 ): Message[] {
   const params: (string | number)[] = [chatId];
   if (before) params.push(before);
-  if (typeof topicId === "number") params.push(topicId);
+  if (hasTopicId && typeof topicId === "number") params.push(topicId);
   if (mediaType) params.push(mediaType);
   const mediaSql = mediaType ? ` AND m.media_type = ?` : "";
   if (before) {
@@ -196,7 +241,7 @@ export function getMessagesAround(
   mediaType?: string
 ): Message[] {
   const params: (string | number)[] = [chatId, messageId];
-  if (typeof topicId === "number") params.push(topicId);
+  if (hasTopicId && typeof topicId === "number") params.push(topicId);
   if (mediaType) params.push(mediaType);
   const mediaSql = mediaType ? ` AND m.media_type = ?` : "";
   const before = queryAll<Message>(
@@ -212,7 +257,7 @@ export function getMessagesAround(
 
 export function getSenders(chatId: number, topicId?: TopicFilter): Sender[] {
   const params: (string | number)[] = [chatId];
-  if (typeof topicId === "number") params.push(topicId);
+  if (hasTopicId && typeof topicId === "number") params.push(topicId);
   return queryAll<Sender>(
     `SELECT sender_id, sender_name, COUNT(*) AS message_count
      FROM messages WHERE chat_id = ?${topicWhere(topicId, "")} AND sender_name IS NOT NULL
@@ -239,7 +284,7 @@ export function searchMessages(
     params.push(chatId);
   }
   sql += topicWhere(topicId);
-  if (typeof topicId === "number") params.push(topicId);
+  if (hasTopicId && typeof topicId === "number") params.push(topicId);
   if (senderName) {
     sql += ` AND m.sender_name LIKE ?`;
     params.push(`%${senderName}%`);
@@ -278,7 +323,7 @@ export function getMedia(
     params.push(chatId);
   }
   sql += topicWhere(topicId);
-  if (typeof topicId === "number") params.push(topicId);
+  if (hasTopicId && typeof topicId === "number") params.push(topicId);
   if (mediaType) {
     sql += ` AND m.media_type = ?`;
     params.push(mediaType);
@@ -299,7 +344,7 @@ export function getMediaCount(chatId?: number, mediaType?: string, topicId?: Top
     params.push(chatId);
   }
   sql += topicWhere(topicId);
-  if (typeof topicId === "number") params.push(topicId);
+  if (hasTopicId && typeof topicId === "number") params.push(topicId);
   if (mediaType) {
     sql += ` AND m.media_type = ?`;
     params.push(mediaType);
@@ -311,7 +356,7 @@ export function getMediaCount(chatId?: number, mediaType?: string, topicId?: Top
 
 export function getChatStats(chatId: number, topicId?: TopicFilter) {
   const params: number[] = [chatId];
-  if (typeof topicId === "number") params.push(topicId);
+  if (hasTopicId && typeof topicId === "number") params.push(topicId);
   const stats = queryOne<Record<string, number | null>>(
     `SELECT
       COUNT(*) as total_messages,
@@ -361,6 +406,7 @@ export function getChatStats(chatId: number, topicId?: TopicFilter) {
 }
 
 export function getTopics(chatId: number): Topic[] {
+  if (!hasTopicsTable || !hasTopicId) return [];
   return queryAll<Topic>(
     `SELECT t.chat_id, t.topic_id, t.title, t.icon_emoji_id, t.icon_color,
       t.created_at_unix, t.is_closed, t.is_hidden, t.last_message_id,
@@ -375,6 +421,7 @@ export function getTopics(chatId: number): Topic[] {
 }
 
 export function getGeneralTopic(chatId: number): Topic | undefined {
+  if (!hasTopicId) return undefined;
   return queryOne<Topic>(
     `SELECT ? AS chat_id, 0 AS topic_id, 'General' AS title, NULL AS icon_emoji_id,
       NULL AS icon_color, NULL AS created_at_unix, 0 AS is_closed, 0 AS is_hidden, NULL AS last_message_id,
@@ -421,7 +468,7 @@ export function getDeletedMessages(chatId: number, limit = 50, topicId?: TopicFi
   if (topicId !== undefined) {
     sql += ` AND message_id IN (SELECT message_id FROM messages WHERE chat_id = ?${topicWhere(topicId, "")})`;
     params.push(chatId);
-    if (typeof topicId === "number") params.push(topicId);
+    if (hasTopicId && typeof topicId === "number") params.push(topicId);
   }
   sql += ` ORDER BY deleted_at_unix DESC LIMIT ?`;
   params.push(limit);
