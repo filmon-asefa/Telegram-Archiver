@@ -454,6 +454,24 @@ body {
   overflow-y: auto;
 }
 
+/* Forum chats: info panel is always a drawer (topics take the third column) */
+.info-panel.info-panel-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  transform: translateX(105%);
+  visibility: hidden;
+  transition: transform 0.3s ease, visibility 0.3s;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+}
+
+.info-panel.info-panel-drawer.info-panel-open {
+  transform: translateX(0);
+  visibility: visible;
+}
+
 @media (max-width: 1023px) {
   .info-panel {
     position: fixed;
@@ -478,6 +496,71 @@ body {
 
 @media (max-width: 1023px) {
   .info-backdrop.info-backdrop-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Forum chats: backdrop shows on all screen sizes */
+.info-backdrop.info-backdrop-always.info-backdrop-open {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+/* Topic panel: inline column on tablet/desktop, slide-over drawer on mobile */
+.topics-panel {
+  width: 300px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-chat-list);
+  border-left: 1px solid var(--border);
+}
+
+@media (min-width: 768px) {
+  .topics-panel-desktop {
+    display: flex;
+  }
+  .topics-panel-mobile {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .topics-panel-desktop {
+    display: none;
+  }
+  .topics-panel-mobile {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 320px;
+    z-index: 50;
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform 0.3s ease, visibility 0.3s;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.35);
+  }
+  .topics-panel-mobile.topics-panel-mobile-open {
+    transform: translateX(0);
+    visibility: visible;
+  }
+}
+
+.topics-backdrop {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .topics-backdrop.topics-backdrop-open {
     display: block;
     position: fixed;
     inset: 0;

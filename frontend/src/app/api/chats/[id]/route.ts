@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChat, getChatStats } from "@/lib/db";
+import { getChat, getChatStats, getTopics } from "@/lib/db";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -16,6 +16,14 @@ export async function GET(
     return NextResponse.json({ error: "Chat not found" }, { status: 404 });
   }
 
-  const stats = getChatStats(chatId);
-  return NextResponse.json({ ...chat, stats });
+  const topicId = req.nextUrl.searchParams.get("topic_id");
+  const topicFilter = topicId === null || topicId === ""
+    ? undefined
+    : topicId === "general"
+      ? "general" as const
+      : (parseInt(topicId, 10) || undefined);
+
+  const stats = getChatStats(chatId, topicFilter);
+  const topics = getTopics(chatId);
+  return NextResponse.json({ ...chat, stats, topics });
 }

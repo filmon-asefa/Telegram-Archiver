@@ -23,9 +23,13 @@ from .reconcile_media import reconcile_media
 from .sse_server import broadcast, start_sse_server
 from .telegram_client import (
     build_client,
+    canonical_chat_type,
+    chat_metadata,
     classify_media,
     download_with_retry,
     extract_forward_info,
+    extract_topic_create,
+    extract_topic_id,
     get_media_duration,
     sender_display_name,
     start_client,
@@ -88,13 +92,16 @@ def register_handlers(client) -> None:
             _date = int(message.date.timestamp())
             _text = message.text
             _mtype = media_type
-            _chat_type = chat.__class__.__name__.lower()
+            _chat_type = canonical_chat_type(chat)
             _reply_to = getattr(message, "reply_to_msg_id", None)
             _duration = get_media_duration(message)
             _group_id = getattr(message, "grouped_id", None)
+            _topic_id = extract_topic_id(message)
+            _topic_create = extract_topic_create(message)
+            _is_forum = bool(getattr(chat, "forum", False))
 
             def _write():
-                db.upsert_chat(_cid, chat_name, _chat_type)
+                db.upsert_chat(_cid, chat_name, _chat_type, **chat_metadata(chat))
                 db.insert_message(
                     chat_id=_cid,
                     message_id=_mid,
@@ -108,8 +115,11 @@ def register_handlers(client) -> None:
                     media_duration=_duration,
                     media_group_id=_group_id,
                     reply_to_message_id=_reply_to,
+                    topic_id=_topic_id,
                     **fwd,
                 )
+                if _is_forum and _topic_id is not None:
+                    db.upsert_topic(_cid, _topic_id, last_message_id=_mid, **(_topic_create or {}))
                 db.set_last_synced_message_id(_cid, _mid)
                 db.commit()
 
@@ -131,6 +141,7 @@ def register_handlers(client) -> None:
                 "is_forward": fwd.get("is_forward", False),
                 "fwd_from_author": fwd.get("fwd_from_author"),
                 "reply_to_message_id": _reply_to,
+                "topic_id": _topic_id,
             })
 
             if media_type is not None and settings.download_media:
@@ -248,7 +259,9 @@ async def _initial_backfill(client) -> None:
             logger.info("  %s: new chat, backfilling from start...", chat_name)
 
         chat_folder = get_chat_folder(chat_id, chat_name)
-        db.upsert_chat(chat_id, chat_name, dialog.entity.__class__.__name__.lower())
+        entity = dialog.entity
+        db.upsert_chat(chat_id, chat_name, canonical_chat_type(entity), **chat_metadata(entity))
+        is_forum = bool(getattr(entity, "forum", False))
 
         count = 0
         highest_seen = last_synced
@@ -260,6 +273,8 @@ async def _initial_backfill(client) -> None:
                     sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
                     media_type = classify_media(message)
                     fwd = await extract_forward_info(message, client)
+                    topic_id = extract_topic_id(message)
+                    topic_create = extract_topic_create(message)
 
                     db.insert_message(
                         chat_id=chat_id,
@@ -274,8 +289,11 @@ async def _initial_backfill(client) -> None:
                         media_duration=get_media_duration(message),
                         media_group_id=getattr(message, "grouped_id", None),
                         reply_to_message_id=getattr(message, "reply_to_msg_id", None),
+                        topic_id=topic_id,
                         **fwd,
                     )
+                    if is_forum and topic_id is not None:
+                        db.upsert_topic(chat_id, topic_id, last_message_id=message.id, **(topic_create or {}))
                     highest_seen = max(highest_seen, message.id)
                     count += 1
                     flood_retries = 0
@@ -374,6 +392,9 @@ async def _catchup_loop(client) -> None:
                     continue
 
                 chat_folder = get_chat_folder(chat_id, dialog.name)
+                entity = dialog.entity
+                db.upsert_chat(chat_id, dialog.name or "Unknown", canonical_chat_type(entity), **chat_metadata(entity))
+                is_forum = bool(getattr(entity, "forum", False))
                 count = 0
                 highest_seen = last_synced
                 async for message in client.iter_messages(dialog, min_id=last_synced, reverse=True):
@@ -381,6 +402,8 @@ async def _catchup_loop(client) -> None:
                         sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
                         media_type = classify_media(message)
                         fwd = await extract_forward_info(message, client)
+                        topic_id = extract_topic_id(message)
+                        topic_create = extract_topic_create(message)
                         db.insert_message(
                             chat_id=chat_id,
                             message_id=message.id,
@@ -394,8 +417,11 @@ async def _catchup_loop(client) -> None:
                             media_duration=get_media_duration(message),
                             media_group_id=getattr(message, "grouped_id", None),
                             reply_to_message_id=getattr(message, "reply_to_msg_id", None),
+                            topic_id=topic_id,
                             **fwd,
                         )
+                        if is_forum and topic_id is not None:
+                            db.upsert_topic(chat_id, topic_id, last_message_id=message.id, **(topic_create or {}))
                         highest_seen = max(highest_seen, message.id)
                         count += 1
                         if count % 200 == 0:

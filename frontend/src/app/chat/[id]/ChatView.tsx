@@ -4,7 +4,15 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import MessageBubble from "@/components/MessageBubble";
-import { formatDateSeparator, getAvatarColor, getInitials } from "@/lib/utils";
+import TopicPanel, { type TopicFilter, type TopicItem } from "@/components/TopicPanel";
+import {
+  formatDateSeparator,
+  getAvatarColor,
+  getChatTypeIcon,
+  getChatTypeLabel,
+  getInitials,
+  normalizeChatType,
+} from "@/lib/utils";
 import { useSseEvents } from "@/lib/useSseEvents";
 
 interface ChatInfo {
@@ -12,6 +20,17 @@ interface ChatInfo {
   chat_name: string;
   chat_type: string;
   message_count: number;
+  last_message_text: string | null;
+  last_message_date: number | null;
+  username: string | null;
+  description: string | null;
+  participant_count: number | null;
+  linked_chat_id: number | null;
+  megagroup: number;
+  broadcast: number;
+  is_verified: number;
+  forum: number;
+  gigagroup: number;
   stats: {
     total_messages: number;
     total_media: number;
@@ -24,7 +43,10 @@ interface ChatInfo {
     first_message_date: number | null;
     last_message_date: number | null;
     top_senders: { sender_id: number; sender_name: string; message_count: number }[];
+    total_edits: number;
+    total_deletions: number;
   };
+  topics: TopicItem[];
 }
 
 interface Message {
@@ -40,6 +62,7 @@ interface Message {
   is_forward: number;
   fwd_from_author: string | null;
   reply_to_message_id: number | null;
+  topic_id: number | null;
   media_duration: number | null;
   media_group_id: number | null;
   media_group_count: number | null;
@@ -83,8 +106,19 @@ export default function ChatView({
   const [deletedMsgs, setDeletedMsgs] = useState<DeletedMsg[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [topicsOpen, setTopicsOpen] = useState(false);
   const [replyTargets, setReplyTargets] = useState<Record<number, Message | null>>({});
   const fetchingRepliesRef = useRef<Set<number>>(new Set());
+  const [selectedTopic, setSelectedTopic] = useState<TopicFilter | undefined>(undefined);
+  const selectedTopicRef = useRef<TopicFilter | undefined>(undefined);
+  const pendingJumpRef = useRef<number | null>(null);
+  const [topics, setTopics] = useState<TopicItem[]>([]);
+  const [generalTopic, setGeneralTopic] = useState<TopicItem | null>(null);
+  const [mediaFilter, setMediaFilter] = useState("");
+  const mediaFilterRef = useRef("");
+  useEffect(() => {
+    mediaFilterRef.current = mediaFilter;
+  }, [mediaFilter]);
 
   const albumBadgeLeaders = useMemo(() => {
     const leaders = new Set<number>();
@@ -101,18 +135,27 @@ export default function ChatView({
   }, [messages]);
 
   useEffect(() => {
+    selectedTopicRef.current = selectedTopic;
+  }, [selectedTopic]);
+
+  useEffect(() => {
     params.then((p) => setChatId(parseInt(p.id, 10)));
   }, [params]);
 
-  const fetchChat = useCallback(async (id: number) => {
-    const res = await fetch(`/api/chats/${id}`);
-    if (res.ok) setChat(await res.json());
+  const fetchChat = useCallback(async (id: number, topicId?: TopicFilter) => {
+    const url = topicId !== undefined
+      ? `/api/chats/${id}?topic_id=${topicId === "general" ? "general" : topicId}`
+      : `/api/chats/${id}`;
+    const res = await fetch(url);
+    return res.ok ? (res.json() as Promise<ChatInfo>) : null;
   }, []);
 
   const fetchMessages = useCallback(
-    async (id: number, before?: number) => {
+    async (id: number, before?: number, topicId?: TopicFilter, media?: string) => {
       const p = new URLSearchParams({ limit: "100" });
       if (before) p.set("before", String(before));
+      if (topicId !== undefined) p.set("topic_id", topicId === "general" ? "general" : String(topicId));
+      if (media) p.set("media_type", media);
       const res = await fetch(`/api/chats/${id}/messages?${p}`);
       const data: Message[] = await res.json();
       return data;
@@ -120,22 +163,123 @@ export default function ChatView({
     []
   );
 
+  const fetchDeleted = useCallback(async (id: number, topicId?: TopicFilter) => {
+    const p = new URLSearchParams({ limit: "50" });
+    if (topicId !== undefined) p.set("topic_id", topicId === "general" ? "general" : String(topicId));
+    const res = await fetch(`/api/chats/${id}/deleted?${p}`);
+    const data: DeletedMsg[] = await res.json();
+    return data;
+  }, []);
+
+  const topicKey = (t: TopicFilter | undefined) =>
+    t === undefined ? undefined : t === "general" ? "general" : String(t);
+
   useEffect(() => {
     if (!chatId) return;
     initialLoadDoneRef.current = false;
     setLoading(true);
     setReplyTargets({});
     setInfoOpen(false);
+    setTopicsOpen(false);
     fetchingRepliesRef.current.clear();
-    Promise.all([fetchChat(chatId), fetchMessages(chatId)]).then(
-      ([, msgs]) => {
+    setEditCounts({});
+    pendingJumpRef.current = null;
+
+    (async () => {
+      const base = await fetchChat(chatId);
+      if (!base) {
+        setChat(null);
+        setLoading(false);
+        return;
+      }
+      const isForum = normalizeChatType(base.chat_type) === "forum" || base.forum === 1;
+      const topicsRes = await fetch(`/api/chats/${chatId}/topics`)
+        .then((r) => r.json())
+        .catch(() => null);
+      const baseTopics: TopicItem[] = topicsRes?.topics ?? base.topics ?? [];
+      setTopics(baseTopics);
+      setGeneralTopic(topicsRes?.general ?? null);
+      let topic: TopicFilter | undefined = undefined;
+      if (isForum) {
+        const saved = localStorage.getItem(`archiver-topic-${chatId}`);
+        const valid = baseTopics.some((t) => t.topic_id === Number(saved));
+        topic = valid ? Number(saved) : "general";
+        setSelectedTopic(topic);
+      } else {
+        setSelectedTopic(undefined);
+      }
+
+      const scoped = isForum && topic !== undefined ? await fetchChat(chatId, topic) : base;
+      setChat(scoped ?? base);
+      const msgs = await fetchMessages(chatId, undefined, isForum ? topic : undefined, mediaFilterRef.current);
+      setMessages(msgs);
+      messagesRef.current = msgs;
+      setHasMore(msgs.length === 100);
+      setLoading(false);
+      fetchDeleted(chatId, isForum ? topic : undefined).then(setDeletedMsgs).catch(() => {});
+    })();
+  }, [chatId, fetchChat, fetchMessages, fetchDeleted]);
+
+  const selectTopic = useCallback((t: TopicFilter) => {
+    if (!chatId) return;
+    setSelectedTopic(t);
+    localStorage.setItem(`archiver-topic-${chatId}`, t === "general" ? "general" : String(t));
+    setMediaFilter("");
+    mediaFilterRef.current = "";
+    setMessages([]);
+    messagesRef.current = [];
+    setHasMore(true);
+    setLoadingMore(false);
+    initialLoadDoneRef.current = false;
+    setLoading(true);
+    Promise.all([fetchChat(chatId, t), fetchMessages(chatId, undefined, t)]).then(([ch, msgs]) => {
+      if (ch) setChat(ch);
+      setMessages(msgs);
+      messagesRef.current = msgs;
+      setHasMore(msgs.length === 100);
+      setLoading(false);
+      fetchDeleted(chatId, t).then(setDeletedMsgs).catch(() => {});
+    });
+  }, [chatId, fetchChat, fetchMessages, fetchDeleted]);
+
+  const handleMediaFilter = useCallback((media: string) => {
+    if (!chatId) return;
+    setMediaFilter(media);
+    setMessages([]);
+    messagesRef.current = [];
+    setHasMore(true);
+    setLoadingMore(false);
+    initialLoadDoneRef.current = false;
+    setLoading(true);
+    fetchMessages(chatId, undefined, selectedTopicRef.current, media || undefined)
+      .then((msgs) => {
         setMessages(msgs);
         messagesRef.current = msgs;
         setHasMore(msgs.length === 100);
         setLoading(false);
-      }
-    );
-  }, [chatId, fetchChat, fetchMessages]);
+      })
+      .catch(() => setLoading(false));
+  }, [chatId, fetchMessages]);
+
+  const topicRows = useMemo((): TopicItem[] => {
+    if (!chat) return [];
+    const general: TopicItem =
+      generalTopic ?? {
+        chat_id: chat.chat_id,
+        topic_id: 0,
+        title: "General",
+        icon_emoji_id: null,
+        icon_color: null,
+        is_closed: 0,
+        is_hidden: 0,
+        message_count: chat.stats.total_messages,
+        media_count: chat.stats.total_media,
+        deleted_count: chat.stats.total_deletions,
+        last_message_date: chat.stats.last_message_date,
+        last_message_text: chat.last_message_text,
+      };
+    return [general, ...topics];
+  }, [chat, generalTopic, topics]);
 
   const didPrependRef = useRef(false);
   const savedScrollRef = useRef(0);
@@ -151,7 +295,7 @@ export default function ChatView({
     const container = containerRef.current;
 
     try {
-      const older = await fetchMessages(chatId, oldest);
+      const older = await fetchMessages(chatId, oldest, selectedTopicRef.current, mediaFilterRef.current);
       if (older.length === 0) {
         setHasMore(false);
       } else {
@@ -222,6 +366,14 @@ export default function ChatView({
     if (!initialLoadDoneRef.current) {
       initialLoadDoneRef.current = true;
       requestAnimationFrame(() => {
+        const pending = pendingJumpRef.current;
+        if (pending) {
+          pendingJumpRef.current = null;
+          if (!scrollToAndHighlight(pending)) {
+            jumpToMessage(pending);
+          }
+          return;
+        }
         container.scrollTop = container.scrollHeight;
         if (hasMoreRef.current && container.scrollHeight <= container.clientHeight + 50) {
           loadMore();
@@ -252,7 +404,12 @@ export default function ChatView({
   const refreshFromDb = useCallback(async () => {
     if (!chatId) return;
     try {
-      const res = await fetch(`/api/chats/${chatId}/messages?limit=100`);
+      const p = new URLSearchParams({ limit: "100" });
+      const cur = selectedTopicRef.current;
+      if (cur !== undefined) p.set("topic_id", cur === "general" ? "general" : String(cur));
+      const mf = mediaFilterRef.current;
+      if (mf) p.set("media_type", mf);
+      const res = await fetch(`/api/chats/${chatId}/messages?${p}`);
       if (!res.ok) return;
       const fetched: Message[] = await res.json();
       const existing = messagesRef.current;
@@ -325,7 +482,12 @@ export default function ChatView({
     (messageId: number) => {
       if (scrollToAndHighlight(messageId)) return;
       if (!chatId) return;
-      fetch(`/api/chats/${chatId}/messages?around=${messageId}&limit=100`)
+      const cur = selectedTopicRef.current;
+      const p = new URLSearchParams({ around: String(messageId), limit: "100" });
+      if (cur !== undefined) p.set("topic_id", cur === "general" ? "general" : String(cur));
+      const mf = mediaFilterRef.current;
+      if (mf) p.set("media_type", mf);
+      fetch(`/api/chats/${chatId}/messages?${p}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data: Message[] | null) => {
           if (!data) return;
@@ -343,6 +505,18 @@ export default function ChatView({
         .catch(() => {});
     },
     [chatId, scrollToAndHighlight]
+  );
+
+  const handleTopicJump = useCallback(
+    (topicId: TopicFilter, messageId: number) => {
+      if (topicId !== selectedTopicRef.current) {
+        pendingJumpRef.current = messageId;
+        selectTopic(topicId);
+      } else {
+        jumpToMessage(messageId);
+      }
+    },
+    [selectTopic, jumpToMessage]
   );
 
   // Resolve reply targets lazily: from the loaded list when possible, otherwise
@@ -381,7 +555,10 @@ export default function ChatView({
 
     for (const rid of unresolved) {
       fetchingRepliesRef.current.add(rid);
-      fetch(`/api/chats/${chatId}/messages?around=${rid}&limit=50`)
+      const cur = selectedTopicRef.current;
+      const p = new URLSearchParams({ around: String(rid), limit: "50" });
+      if (cur !== undefined) p.set("topic_id", cur === "general" ? "general" : String(cur));
+      fetch(`/api/chats/${chatId}/messages?${p}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data: Message[] | null) => {
           fetchingRepliesRef.current.delete(rid);
@@ -409,6 +586,14 @@ export default function ChatView({
   useSseEvents({
     new_message: (data) => {
       if (data.chat_id !== chatId) return;
+      const cur = selectedTopicRef.current;
+      const msgTopic = data.topic_id ?? null;
+      if (cur !== undefined) {
+        const matches = cur === "general" ? msgTopic == null : msgTopic === cur;
+        if (!matches) return;
+      }
+      const mf = mediaFilterRef.current;
+      if (mf && (data.media_type ?? null) !== mf) return;
       const seen = new Set(messagesRef.current.map((m) => m.message_id));
       if (seen.has(data.message_id)) return;
       const container = containerRef.current;
@@ -432,6 +617,7 @@ export default function ChatView({
           is_forward: data.is_forward ? 1 : 0,
           fwd_from_author: data.fwd_from_author ?? null,
           reply_to_message_id: data.reply_to_message_id ?? null,
+          topic_id: msgTopic,
           is_deleted: 0,
           deleted_at_unix: null,
         },
@@ -519,9 +705,12 @@ export default function ChatView({
 
   const displayMessages = [...messages].reverse();
   const name = chat.chat_name || "Unknown";
-  const chatType = chat.chat_type;
+  const rawType = chat.chat_type;
+  const chatType = normalizeChatType(rawType);
+  const isForum = chatType === "forum" || chat.forum === 1;
   const isUser = chatType === "user";
-  const isGroup = chatType === "chat";
+  const isBot = chatType === "bot";
+  const isGroup = chatType === "group" || chatType === "supergroup" || rawType === "chat";
   const isChannel = chatType === "channel";
 
   const groupedMessages: ({ type: "date"; key: string; unix: number } | { type: "msg"; msg: Message; showSender: boolean; idx: number })[] = [];
@@ -536,14 +725,30 @@ export default function ChatView({
     groupedMessages.push({ type: "msg", msg, showSender: shouldShowSender(msg, idx), idx });
   });
 
-  let headerSubtitle = `${chat.message_count.toLocaleString()} messages`;
-  if (isGroup) {
-    const memberCount = chat.stats.top_senders.length;
+  const selectedTopicName = (() => {
+    if (!isForum || selectedTopic === undefined) return undefined;
+    if (selectedTopic === "general") return "General";
+    return topics.find((t) => t.topic_id === selectedTopic)?.title ?? `Topic ${selectedTopic}`;
+  })();
+
+  const msgCount = chat.stats.total_messages;
+  let headerSubtitle = `${msgCount.toLocaleString()} messages`;
+  if (isForum) {
+    headerSubtitle = `${topics.length} topics · ${msgCount.toLocaleString()} messages`;
+  } else if (isGroup) {
+    const memberCount = chat.participant_count ?? chat.stats.top_senders.length;
     headerSubtitle = memberCount > 0
-      ? `${memberCount} member${memberCount > 1 ? "s" : ""} · ${chat.message_count.toLocaleString()} messages`
-      : `group · ${chat.message_count.toLocaleString()} messages`;
+      ? `${memberCount.toLocaleString()} member${memberCount > 1 ? "s" : ""} · ${msgCount.toLocaleString()} messages`
+      : `group · ${msgCount.toLocaleString()} messages`;
   } else if (isChannel) {
-    headerSubtitle = `channel · ${chat.message_count.toLocaleString()} messages`;
+    const subscriberCount = chat.participant_count;
+    headerSubtitle = subscriberCount
+      ? `${subscriberCount.toLocaleString()} subscriber${subscriberCount > 1 ? "s" : ""} · ${msgCount.toLocaleString()} messages`
+      : `channel · ${msgCount.toLocaleString()} messages`;
+  } else if (isBot) {
+    headerSubtitle = `bot · ${msgCount.toLocaleString()} messages`;
+  } else if (isUser) {
+    headerSubtitle = `user · ${msgCount.toLocaleString()} messages`;
   }
 
   return (
@@ -572,7 +777,7 @@ export default function ChatView({
             >
               {getInitials(name)}
             </div>
-            {isGroup && (
+            {(isGroup || isForum) && (
               <div
                 className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
                 style={{ background: "var(--bg-header)" }}
@@ -592,18 +797,42 @@ export default function ChatView({
                 </svg>
               </div>
             )}
+            {isBot && (
+              <div
+                className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
+                style={{ background: "var(--bg-header)" }}
+              >
+                <span className="text-[9px] leading-none" title="Bot">🤖</span>
+              </div>
+            )}
           </div>
           <div className="flex-1 min-w-0 ml-1">
             <div className="font-semibold text-[15px] truncate" style={{ color: "var(--text-primary)" }}>
               {name}
             </div>
             <div className="text-[13px] truncate" style={{ color: "var(--text-secondary)" }}>
-              {headerSubtitle}
+              {isForum && selectedTopicName ? `${selectedTopicName} · ${headerSubtitle}` : headerSubtitle}
             </div>
           </div>
+          {isForum && (
+            <button
+              onClick={() => setTopicsOpen(true)}
+              className="md:hidden flex items-center justify-center w-9 h-9 rounded-full shrink-0"
+              style={{ color: "var(--text-secondary)" }}
+              title="Topics"
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 6h16" />
+                <path d="M7 12h10" />
+                <path d="M10 18h4" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={() => setInfoOpen(true)}
-            className="hidden md:flex lg:hidden items-center justify-center w-9 h-9 rounded-full shrink-0"
+            className={`${isForum ? "flex" : "hidden md:flex lg:hidden"} items-center justify-center w-9 h-9 rounded-full shrink-0`}
             style={{ color: "var(--text-secondary)" }}
             title="Chat info"
             onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
@@ -690,13 +919,50 @@ export default function ChatView({
         </div>
       </div>
 
+      {isForum && chatId != null && (
+        <>
+          <div className="topics-panel topics-panel-desktop">
+            <TopicPanel
+              chatId={chatId}
+              chatName={name}
+              topics={topicRows}
+              selectedTopic={selectedTopic ?? "general"}
+              onSelect={selectTopic}
+              onJump={handleTopicJump}
+              mediaFilter={mediaFilter}
+              onMediaFilter={handleMediaFilter}
+            />
+          </div>
+          <div
+            className={`topics-backdrop ${topicsOpen ? "topics-backdrop-open" : ""}`}
+            onClick={() => setTopicsOpen(false)}
+            aria-hidden="true"
+          />
+          <div className={`topics-panel topics-panel-mobile ${topicsOpen ? "topics-panel-mobile-open" : ""}`}>
+            <TopicPanel
+              chatId={chatId}
+              chatName={name}
+              topics={topicRows}
+              selectedTopic={selectedTopic ?? "general"}
+              onSelect={(t) => {
+                selectTopic(t);
+                setTopicsOpen(false);
+              }}
+              onJump={handleTopicJump}
+              mediaFilter={mediaFilter}
+              onMediaFilter={handleMediaFilter}
+            />
+          </div>
+        </>
+      )}
+
       <div
-        className={`info-backdrop ${infoOpen ? "info-backdrop-open" : ""}`}
+        className={`info-backdrop ${isForum ? "info-backdrop-always" : ""} ${infoOpen ? "info-backdrop-open" : ""}`}
         onClick={() => setInfoOpen(false)}
         aria-hidden="true"
       />
       <div
-        className={`info-panel relative flex-col border-l ${infoOpen ? "info-panel-open" : ""}`}
+        className={`info-panel relative flex-col border-l ${isForum ? "info-panel-drawer" : ""} ${infoOpen ? "info-panel-open" : ""}`}
         style={{ background: "var(--bg-chat-list)", borderColor: "var(--border)" }}
       >
         <button
@@ -718,7 +984,7 @@ export default function ChatView({
             >
               {getInitials(name)}
             </div>
-            {isGroup && (
+            {(isGroup || isForum) && (
               <div
                 className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full flex items-center justify-center"
                 style={{ background: "var(--bg-chat-list)", border: "3px solid var(--bg-chat-list)" }}
@@ -738,12 +1004,22 @@ export default function ChatView({
                 </svg>
               </div>
             )}
+            {isBot && (
+              <div
+                className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full flex items-center justify-center"
+                style={{ background: "var(--bg-chat-list)", border: "3px solid var(--bg-chat-list)" }}
+              >
+                <span className="text-base leading-none" title="Bot">🤖</span>
+              </div>
+            )}
           </div>
           <div className="font-semibold text-[15px] text-center" style={{ color: "var(--text-primary)" }}>
             {name}
           </div>
-          <div className="text-[13px] mt-1" style={{ color: "var(--text-secondary)" }}>
-            {isUser ? "user" : isGroup ? "group" : "channel"}
+          <div className="text-[13px] mt-1 flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
+            <span>{getChatTypeIcon(chatType)}</span>
+            <span>{getChatTypeLabel(chatType)}</span>
+            {chat.is_verified === 1 && <span title="Verified">✓</span>}
           </div>
         </div>
 
@@ -809,18 +1085,39 @@ export default function ChatView({
           </h3>
           <div className="text-[13px] space-y-1" style={{ color: "var(--text-secondary)" }}>
             <div>Chat ID: <span style={{ color: "var(--text-primary)" }}>{chat.chat_id}</span></div>
-            <div>Type: <span style={{ color: "var(--text-primary)" }}>{chatType}</span></div>
+            <div>Type: <span style={{ color: "var(--text-primary)" }}>{getChatTypeLabel(chatType)}</span></div>
+            {chat.username && (
+              <div>Username: <span style={{ color: "var(--text-primary)" }}>@{chat.username}</span></div>
+            )}
+            {chat.participant_count != null && (
+              <div>
+                {isChannel ? "Subscribers" : "Members"}: <span style={{ color: "var(--text-primary)" }}>{chat.participant_count.toLocaleString()}</span>
+              </div>
+            )}
+            {chat.description && (
+              <div className="text-[13px] leading-snug" style={{ color: "var(--text-primary)" }}>
+                {chat.description.length > 200 ? chat.description.slice(0, 200) + "…" : chat.description}
+              </div>
+            )}
+            {(chat.megagroup === 1 || chat.broadcast === 1 || chat.forum === 1 || chat.gigagroup === 1) && (
+              <div className="flex flex-wrap gap-1 pt-1">
+                {chat.forum === 1 && <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: "var(--bg-input)" }}>forum</span>}
+                {chat.megagroup === 1 && <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: "var(--bg-input)" }}>megagroup</span>}
+                {chat.broadcast === 1 && <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: "var(--bg-input)" }}>broadcast</span>}
+                {chat.gigagroup === 1 && <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: "var(--bg-input)" }}>gigagroup</span>}
+              </div>
+            )}
             {chat.stats?.first_message_date && (
               <div>First message: <span style={{ color: "var(--text-primary)" }}>{formatDateSeparator(chat.stats.first_message_date)}</span></div>
             )}
             {chat.stats?.last_message_date && (
               <div>Last message: <span style={{ color: "var(--text-primary)" }}>{formatDateSeparator(chat.stats.last_message_date)}</span></div>
             )}
-            {(chat.stats as Record<string, unknown>).total_edits ? (
-              <div>Edits tracked: <span style={{ color: "var(--text-primary)" }}>{String((chat.stats as Record<string, unknown>).total_edits)}</span></div>
+            {chat.stats.total_edits ? (
+              <div>Edits tracked: <span style={{ color: "var(--text-primary)" }}>{chat.stats.total_edits}</span></div>
             ) : null}
-            {(chat.stats as Record<string, unknown>).total_deletions ? (
-              <div>Deletions tracked: <span style={{ color: "var(--text-primary)" }}>{String((chat.stats as Record<string, unknown>).total_deletions)}</span></div>
+            {chat.stats.total_deletions ? (
+              <div>Deletions tracked: <span style={{ color: "var(--text-primary)" }}>{chat.stats.total_deletions}</span></div>
             ) : null}
           </div>
         </div>

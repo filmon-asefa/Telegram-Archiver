@@ -8,6 +8,7 @@ import {
   truncate,
   getAvatarColor,
   getInitials,
+  normalizeChatType,
 } from "@/lib/utils";
 import { useSseEvents } from "@/lib/useSseEvents";
 
@@ -21,7 +22,8 @@ interface Chat {
 }
 
 function ChatTypeBadge({ chatType }: { chatType: string }) {
-  if (chatType === "channel") {
+  const type = normalizeChatType(chatType);
+  if (type === "channel") {
     return (
       <div
         className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
@@ -33,7 +35,7 @@ function ChatTypeBadge({ chatType }: { chatType: string }) {
       </div>
     );
   }
-  if (chatType === "chat") {
+  if (type === "group" || type === "supergroup") {
     return (
       <div
         className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
@@ -45,13 +47,37 @@ function ChatTypeBadge({ chatType }: { chatType: string }) {
       </div>
     );
   }
+  if (type === "forum") {
+    return (
+      <div
+        className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
+        style={{ background: "var(--bg-chat-list)", border: "2px solid var(--bg-chat-list)" }}
+      >
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="#4ecca3">
+          <path d="M4 6h16v2H4zM4 11h10v2H4zM4 16h7v2H4z" />
+        </svg>
+      </div>
+    );
+  }
+  if (type === "bot") {
+    return (
+      <div
+        className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
+        style={{ background: "var(--bg-chat-list)", border: "2px solid var(--bg-chat-list)" }}
+      >
+        <span className="text-[9px] leading-none">🤖</span>
+      </div>
+    );
+  }
   return null;
 }
 
 const ChatRow = memo(function ChatRow({ chat, isActive }: { chat: Chat; isActive: boolean }) {
   const name = chat.chat_name || "Unknown";
-  const isGroup = chat.chat_type === "chat";
-  const isChannel = chat.chat_type === "channel";
+  const type = normalizeChatType(chat.chat_type);
+  const isGroup = type === "group" || type === "supergroup";
+  const isChannel = type === "channel";
+  const isForum = type === "forum";
   return (
     <Link
       href={`/chat/${chat.chat_id}`}
@@ -83,7 +109,7 @@ const ChatRow = memo(function ChatRow({ chat, isActive }: { chat: Chat; isActive
                 <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12H7v-2h5v2zm5-4H7V8h10v2z" />
               </svg>
             )}
-            {isGroup && (
+            {(isGroup || isForum) && (
               <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="#4ecca3">
                 <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
               </svg>

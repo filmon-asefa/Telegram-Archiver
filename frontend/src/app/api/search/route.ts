@@ -16,13 +16,20 @@ export async function GET(req: NextRequest) {
     ? parseInt(req.nextUrl.searchParams.get("chat_id")!, 10)
     : undefined;
   const senderName = req.nextUrl.searchParams.get("sender") || undefined;
+  const mediaType = req.nextUrl.searchParams.get("media_type") || undefined;
   const dateFrom = req.nextUrl.searchParams.get("date_from")
     ? parseInt(req.nextUrl.searchParams.get("date_from")!, 10)
     : undefined;
   const dateTo = req.nextUrl.searchParams.get("date_to")
     ? parseInt(req.nextUrl.searchParams.get("date_to")!, 10)
     : undefined;
+  const topicId = req.nextUrl.searchParams.get("topic_id");
+  const topicFilter = topicId === null || topicId === ""
+    ? undefined
+    : topicId === "general"
+      ? "general" as const
+      : (parseInt(topicId, 10) || undefined);
 
-  const results = searchMessages(q, limit, chatId, senderName, dateFrom, dateTo);
+  const results = searchMessages(q, limit, chatId, senderName, dateFrom, dateTo, topicFilter, mediaType);
   return NextResponse.json(results.map(sanitizeMessage));
 }

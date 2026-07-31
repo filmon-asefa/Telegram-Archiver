@@ -21,9 +21,13 @@ from . import db
 from .config import settings
 from .telegram_client import (
     build_client,
+    canonical_chat_type,
+    chat_metadata,
     classify_media,
     download_with_retry,
     extract_forward_info,
+    extract_topic_create,
+    extract_topic_id,
     get_media_duration,
     sender_display_name,
     start_client,
@@ -43,7 +47,9 @@ async def _sleep_flood(e: FloodWaitError) -> None:
 
 async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = False) -> int:
     chat_id = dialog.id
-    db.upsert_chat(chat_id, dialog.name or "Unknown", dialog.entity.__class__.__name__.lower())
+    entity = dialog.entity
+    db.upsert_chat(chat_id, dialog.name or "Unknown", canonical_chat_type(entity), **chat_metadata(entity))
+    is_forum = bool(getattr(entity, "forum", False))
     chat_folder = get_chat_folder(chat_id, dialog.name)
 
     min_id = 0 if force else db.get_last_synced_message_id(chat_id)
@@ -67,6 +73,8 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
                 )
 
             fwd = await extract_forward_info(message, client)
+            topic_id = extract_topic_id(message)
+            topic_create = extract_topic_create(message)
 
             db.insert_message(
                 chat_id=chat_id,
@@ -81,8 +89,11 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
                 media_duration=get_media_duration(message),
                 media_group_id=getattr(message, "grouped_id", None),
                 reply_to_message_id=getattr(message, "reply_to_msg_id", None),
+                topic_id=topic_id,
                 **fwd,
             )
+            if is_forum and topic_id is not None:
+                db.upsert_topic(chat_id, topic_id, last_message_id=message.id, **(topic_create or {}))
             highest_seen = max(highest_seen, message.id)
             count += 1
             flood_retries = 0

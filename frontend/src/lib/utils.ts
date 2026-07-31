@@ -105,12 +105,39 @@ export function getMediaIcon(type: string | null): string {
   }
 }
 
-export function getChatTypeIcon(type: string): string {
+export function normalizeChatType(type: string): string {
   switch (type) {
+    case "chat":
+    case "chatforbidden":
+      return "group";
+    case "channelforbidden":
+      return "channel";
+    default:
+      return type;
+  }
+}
+
+export function getChatTypeIcon(type: string): string {
+  switch (normalizeChatType(type)) {
     case "user": return "👤";
+    case "bot": return "🤖";
     case "group": return "👥";
+    case "supergroup": return "👥";
     case "channel": return "📢";
+    case "forum": return "🗂️";
     default: return "💬";
+  }
+}
+
+export function getChatTypeLabel(type: string): string {
+  switch (normalizeChatType(type)) {
+    case "user": return "user";
+    case "bot": return "bot";
+    case "group": return "group";
+    case "supergroup": return "group";
+    case "channel": return "channel";
+    case "forum": return "forum";
+    default: return type;
   }
 }
 

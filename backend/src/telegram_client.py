@@ -189,3 +189,76 @@ async def extract_forward_info(message: Message, client: TelegramClient | None =
         "fwd_from_date": int(fwd.date.timestamp()) if fwd.date else None,
         "fwd_from_author": author,
     }
+
+
+def extract_topic_id(message: Message) -> Optional[int]:
+    """Return the forum topic root message id for *message*, or None.
+
+    Only messages posted inside a forum topic carry ``reply_to_top_id``.
+    Messages in the General topic (or a non-forum chat) return None.
+    Topic-creation messages are their own root, so their id is returned.
+    """
+    reply_to = getattr(message, "reply_to", None)
+    if reply_to is None:
+        return None
+    if not getattr(reply_to, "forum_topic", False):
+        return None
+    top_id = getattr(reply_to, "reply_to_top_id", None)
+    if top_id:
+        return top_id
+    # topic-creation root message has no reply target; its own id is the topic id
+    return message.id
+
+
+def extract_topic_create(message: Message) -> Optional[dict]:
+    """Return topic metadata when *message* is a topic-creation service message.
+
+    Returns dict with keys: title, icon_color, icon_emoji_id, created_at_unix.
+    """
+    from telethon.tl.types import MessageActionTopicCreate
+
+    action = getattr(message, "action", None)
+    if not isinstance(action, MessageActionTopicCreate):
+        return None
+    return {
+        "title": getattr(action, "title", None),
+        "icon_color": getattr(action, "icon_color", None),
+        "icon_emoji_id": getattr(action, "icon_emoji_id", None),
+        "created_at_unix": int(message.date.timestamp()) if message.date else None,
+    }
+
+
+def canonical_chat_type(entity) -> str:
+    """Map a Telethon entity to a canonical chat type.
+
+    Returns one of: 'user' | 'bot' | 'group' | 'supergroup' | 'channel' | 'forum'.
+    Forbidden entity types fall back to the closest allowed value.
+    """
+    class_name = entity.__class__.__name__.lower()
+    if class_name in ("chat", "chatforbidden", "chatinviter"):
+        return "group"
+    if class_name == "user":
+        return "bot" if getattr(entity, "bot", False) else "user"
+    if class_name == "channel":
+        if getattr(entity, "forum", False):
+            return "forum"
+        if getattr(entity, "megagroup", False):
+            return "supergroup"
+        return "channel"
+    if class_name == "channelforbidden":
+        return "channel"
+    return class_name
+
+
+def chat_metadata(entity) -> dict:
+    """Extract optional metadata for the chats table from a Telethon entity."""
+    return {
+        "username": getattr(entity, "username", None),
+        "description": getattr(entity, "about", None),
+        "participant_count": getattr(entity, "participants_count", None),
+        "megagroup": bool(getattr(entity, "megagroup", False)),
+        "broadcast": bool(getattr(entity, "broadcast", False)),
+        "is_verified": bool(getattr(entity, "verified", False)),
+        "forum": bool(getattr(entity, "forum", False)),
+        "gigagroup": bool(getattr(entity, "gigagroup", False)),
+    }
