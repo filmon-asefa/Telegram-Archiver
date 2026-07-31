@@ -547,8 +547,8 @@ export default function ChatView({
   }
 
   return (
-    <div className="flex flex-1 min-w-0">
-      <div className="flex-1 min-w-0 flex flex-col">
+    <div className="flex flex-1 min-w-0 min-h-0">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         <div
           className="flex items-center gap-2 px-2 py-[6px] shrink-0"
           style={{ background: "var(--bg-header)", borderBottom: "1px solid var(--border)" }}
