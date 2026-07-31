@@ -31,6 +31,10 @@ PYTHONPATH=backend python3 -m src.main --scan-media --dry-run
 
 # Resolve forward source names for existing messages
 PYTHONPATH=backend python3 -m src.main --resolve-forwards
+
+# Fetch real forum topic names/metadata for forum chats
+PYTHONPATH=backend python3 -m src.main --resolve-topics
+PYTHONPATH=backend python3 -m src.main --resolve-topics --backfill-chat <id>
 ```
 
 ### Frontend
