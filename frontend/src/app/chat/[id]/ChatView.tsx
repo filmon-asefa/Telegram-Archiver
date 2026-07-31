@@ -82,6 +82,7 @@ export default function ChatView({
   const [editCounts, setEditCounts] = useState<Record<number, number>>({});
   const [deletedMsgs, setDeletedMsgs] = useState<DeletedMsg[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [replyTargets, setReplyTargets] = useState<Record<number, Message | null>>({});
   const fetchingRepliesRef = useRef<Set<number>>(new Set());
 
@@ -124,6 +125,7 @@ export default function ChatView({
     initialLoadDoneRef.current = false;
     setLoading(true);
     setReplyTargets({});
+    setInfoOpen(false);
     fetchingRepliesRef.current.clear();
     Promise.all([fetchChat(chatId), fetchMessages(chatId)]).then(
       ([, msgs]) => {
@@ -496,7 +498,7 @@ export default function ChatView({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen" style={{ color: "var(--text-secondary)" }}>
+      <div className="flex-1 flex items-center justify-center" style={{ color: "var(--text-secondary)" }}>
         Loading…
       </div>
     );
@@ -504,7 +506,7 @@ export default function ChatView({
 
   if (!chat) {
     return (
-      <div className="flex items-center justify-center h-screen" style={{ color: "var(--text-secondary)" }}>
+      <div className="flex-1 flex items-center justify-center" style={{ color: "var(--text-secondary)" }}>
         Chat not found
       </div>
     );
@@ -545,15 +547,15 @@ export default function ChatView({
   }
 
   return (
-    <div className="flex h-screen">
-      <div className="flex-1 flex flex-col">
+    <div className="flex flex-1 min-w-0">
+      <div className="flex-1 min-w-0 flex flex-col">
         <div
           className="flex items-center gap-2 px-2 py-[6px] shrink-0"
           style={{ background: "var(--bg-header)", borderBottom: "1px solid var(--border)" }}
         >
           <Link
             href="/"
-            className="flex items-center justify-center w-9 h-9 rounded-full shrink-0"
+            className="md:hidden flex items-center justify-center w-9 h-9 rounded-full shrink-0"
             style={{ color: "var(--text-secondary)" }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -599,6 +601,20 @@ export default function ChatView({
               {headerSubtitle}
             </div>
           </div>
+          <button
+            onClick={() => setInfoOpen(true)}
+            className="hidden md:flex lg:hidden items-center justify-center w-9 h-9 rounded-full shrink-0"
+            style={{ color: "var(--text-secondary)" }}
+            title="Chat info"
+            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 11v5" />
+              <path d="M12 8h.01" />
+            </svg>
+          </button>
         </div>
 
         <div
@@ -675,9 +691,25 @@ export default function ChatView({
       </div>
 
       <div
-        className="w-[300px] shrink-0 flex-col border-l hidden lg:flex"
+        className={`info-backdrop ${infoOpen ? "info-backdrop-open" : ""}`}
+        onClick={() => setInfoOpen(false)}
+        aria-hidden="true"
+      />
+      <div
+        className={`info-panel relative flex-col border-l ${infoOpen ? "info-panel-open" : ""}`}
         style={{ background: "var(--bg-chat-list)", borderColor: "var(--border)" }}
       >
+        <button
+          onClick={() => setInfoOpen(false)}
+          className="lg:hidden absolute top-3 right-3 w-8 h-8 rounded-full flex items-center justify-center z-10"
+          style={{ color: "var(--text-secondary)", background: "rgba(255,255,255,0.06)" }}
+          title="Close chat info"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M18 6L6 18" />
+            <path d="M6 6l12 12" />
+          </svg>
+        </button>
         <div className="flex flex-col items-center py-6 px-4">
           <div className="relative mb-3">
             <div

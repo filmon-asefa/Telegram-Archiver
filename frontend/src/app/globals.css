@@ -372,3 +372,116 @@ body {
   word-break: break-word;
   width: 100%;
 }
+
+/* ---- Responsive app shell (Telegram Desktop-style split pane) ---- */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-sidebar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-chat-list);
+  border-right: 1px solid var(--border);
+  flex: none;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Desktop (>=1024px): sidebar + conversation + inline info panel */
+@media (min-width: 1024px) {
+  .app-sidebar {
+    width: 350px;
+  }
+}
+
+/* Tablet (768px-1023px): sidebar + conversation (info panel becomes a drawer) */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-sidebar {
+    width: 320px;
+  }
+}
+
+/* Mobile (<768px): slide panes like Telegram Mobile */
+@media (max-width: 767px) {
+  .app-shell {
+    position: relative;
+  }
+  .app-sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    transform: translateX(0);
+    transition: transform 0.3s ease;
+    z-index: 30;
+    border-right: none;
+  }
+  .app-sidebar.is-hidden {
+    transform: translateX(-100%);
+  }
+  .app-main {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    z-index: 20;
+  }
+  .app-main.is-active {
+    transform: translateX(0);
+  }
+}
+
+/* Info panel: inline third column on desktop, slide-over drawer on tablet */
+.info-panel {
+  width: 300px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+@media (max-width: 1023px) {
+  .info-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    transform: translateX(105%);
+    visibility: hidden;
+    transition: transform 0.3s ease, visibility 0.3s;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+  }
+  .info-panel.info-panel-open {
+    transform: translateX(0);
+    visibility: visible;
+  }
+}
+
+.info-backdrop {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .info-backdrop.info-backdrop-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.4);
+  }
+}

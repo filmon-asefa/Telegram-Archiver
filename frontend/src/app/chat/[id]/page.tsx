@@ -11,7 +11,7 @@ export default function ChatPage({
   return (
     <Suspense
       fallback={
-        <div className="flex items-center justify-center h-screen text-gray-400">
+        <div className="flex-1 flex items-center justify-center" style={{ color: "var(--text-secondary)" }}>
           Loading…
         </div>
       }
