@@ -361,12 +361,15 @@ def insert_message(
     conn = get_connection()
     conn.execute(
         """
-        INSERT OR IGNORE INTO messages
+        INSERT INTO messages
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
              date_unix, text, media_type, file_path, media_duration, media_group_id,
              is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author,
              reply_to_message_id, topic_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id, message_id) DO UPDATE SET
+            topic_id = COALESCE(excluded.topic_id, messages.topic_id),
+            reply_to_message_id = COALESCE(excluded.reply_to_message_id, messages.reply_to_message_id)
         """,
         (
             chat_id,
