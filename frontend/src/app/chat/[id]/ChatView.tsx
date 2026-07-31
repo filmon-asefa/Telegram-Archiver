@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import MessageBubble from "@/components/MessageBubble";
@@ -39,6 +39,10 @@ interface Message {
   file_path: string | null;
   is_forward: number;
   fwd_from_author: string | null;
+  reply_to_message_id: number | null;
+  media_duration: number | null;
+  media_group_id: number | null;
+  media_group_count: number | null;
   is_deleted: number;
   deleted_at_unix: number | null;
 }
@@ -78,6 +82,22 @@ export default function ChatView({
   const [editCounts, setEditCounts] = useState<Record<number, number>>({});
   const [deletedMsgs, setDeletedMsgs] = useState<DeletedMsg[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
+  const [replyTargets, setReplyTargets] = useState<Record<number, Message | null>>({});
+  const fetchingRepliesRef = useRef<Set<number>>(new Set());
+
+  const albumBadgeLeaders = useMemo(() => {
+    const leaders = new Set<number>();
+    const seen = new Set<number>();
+    for (const m of messages) {
+      if (m.is_deleted === 1 && m.media_group_id != null && (m.media_group_count ?? 0) > 1) {
+        if (!seen.has(m.media_group_id)) {
+          seen.add(m.media_group_id);
+          leaders.add(m.message_id);
+        }
+      }
+    }
+    return leaders;
+  }, [messages]);
 
   useEffect(() => {
     params.then((p) => setChatId(parseInt(p.id, 10)));
@@ -103,6 +123,8 @@ export default function ChatView({
     if (!chatId) return;
     initialLoadDoneRef.current = false;
     setLoading(true);
+    setReplyTargets({});
+    fetchingRepliesRef.current.clear();
     Promise.all([fetchChat(chatId), fetchMessages(chatId)]).then(
       ([, msgs]) => {
         setMessages(msgs);
@@ -223,6 +245,165 @@ export default function ChatView({
       .catch(() => {});
   }, [chatId]);
 
+  // Periodic DB refresh: reconciles file_path (media linked after download),
+  // edits, deletions, and reply data even if an SSE event was missed.
+  const refreshFromDb = useCallback(async () => {
+    if (!chatId) return;
+    try {
+      const res = await fetch(`/api/chats/${chatId}/messages?limit=100`);
+      if (!res.ok) return;
+      const fetched: Message[] = await res.json();
+      const existing = messagesRef.current;
+      const fetchedMap = new Map(fetched.map((m) => [m.message_id, m]));
+
+      let changed = false;
+      const merged = existing.map((m) => {
+        const fresh = fetchedMap.get(m.message_id);
+        if (!fresh) return m;
+        if (
+          m.file_path !== fresh.file_path ||
+          m.text !== fresh.text ||
+          m.is_deleted !== fresh.is_deleted ||
+          m.deleted_at_unix !== fresh.deleted_at_unix ||
+          m.media_type !== fresh.media_type ||
+          m.sender_name !== fresh.sender_name ||
+          m.is_forward !== fresh.is_forward ||
+          m.fwd_from_author !== fresh.fwd_from_author ||
+          m.reply_to_message_id !== fresh.reply_to_message_id
+        ) {
+          changed = true;
+          return { ...m, ...fresh };
+        }
+        return m;
+      });
+
+      const seen = new Set(existing.map((m) => m.message_id));
+      const freshOnes = fetched.filter((m) => !seen.has(m.message_id));
+      let next = merged;
+      if (freshOnes.length > 0) {
+        changed = true;
+        next = [...freshOnes, ...merged];
+      }
+
+      if (changed) {
+        messagesRef.current = next;
+        setMessages(next);
+        const container = containerRef.current;
+        const wasAtBottom = container
+          ? container.scrollHeight - container.scrollTop - container.clientHeight < 80
+          : true;
+        if (freshOnes.length > 0 && wasAtBottom) {
+          requestAnimationFrame(() => {
+            if (container) container.scrollTop = container.scrollHeight;
+          });
+        }
+      }
+    } catch {
+      // refresh is a best-effort safety net
+    }
+  }, [chatId]);
+
+  useEffect(() => {
+    if (!chatId) return;
+    refreshFromDb();
+    const timer = setInterval(refreshFromDb, 5000);
+    return () => clearInterval(timer);
+  }, [chatId, refreshFromDb]);
+
+  const scrollToAndHighlight = useCallback((messageId: number) => {
+    const el = document.getElementById(`msg-${messageId}`);
+    if (!el) return false;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("highlight-flash");
+    setTimeout(() => el.classList.remove("highlight-flash"), 1500);
+    return true;
+  }, []);
+
+  const jumpToMessage = useCallback(
+    (messageId: number) => {
+      if (scrollToAndHighlight(messageId)) return;
+      if (!chatId) return;
+      fetch(`/api/chats/${chatId}/messages?around=${messageId}&limit=100`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: Message[] | null) => {
+          if (!data) return;
+          const seen = new Set(messagesRef.current.map((m) => m.message_id));
+          const fresh = data.filter((m) => !seen.has(m.message_id));
+          if (fresh.length > 0) {
+            const next = [...messagesRef.current, ...fresh].sort(
+              (a, b) => b.message_id - a.message_id
+            );
+            messagesRef.current = next;
+            setMessages(next);
+          }
+          setTimeout(() => scrollToAndHighlight(messageId), 100);
+        })
+        .catch(() => {});
+    },
+    [chatId, scrollToAndHighlight]
+  );
+
+  // Resolve reply targets lazily: from the loaded list when possible, otherwise
+  // fetch a window around the target so the reply header can render and jump.
+  useEffect(() => {
+    if (!chatId) return;
+    const byId = new Map(messagesRef.current.map((m) => [m.message_id, m]));
+
+    setReplyTargets((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const ridStr of Object.keys(next)) {
+        const rid = Number(ridStr);
+        const live = byId.get(rid);
+        if (live && next[rid] !== live) {
+          next[rid] = live;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+
+    const unresolved: number[] = [];
+    for (const m of messagesRef.current) {
+      const rid = m.reply_to_message_id;
+      if (rid == null) continue;
+      if (byId.has(rid)) {
+        if (replyTargets[rid] === undefined) {
+          setReplyTargets((prev) => ({ ...prev, [rid]: byId.get(rid)! }));
+        }
+        continue;
+      }
+      if (replyTargets[rid] !== undefined || fetchingRepliesRef.current.has(rid)) continue;
+      unresolved.push(rid);
+    }
+
+    for (const rid of unresolved) {
+      fetchingRepliesRef.current.add(rid);
+      fetch(`/api/chats/${chatId}/messages?around=${rid}&limit=50`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: Message[] | null) => {
+          fetchingRepliesRef.current.delete(rid);
+          const found = data?.find((x) => x.message_id === rid) ?? null;
+          setReplyTargets((prev) => ({ ...prev, [rid]: found }));
+          if (found) {
+            const seen = new Set(messagesRef.current.map((m) => m.message_id));
+            const fresh = (data ?? []).filter((m) => !seen.has(m.message_id));
+            if (fresh.length > 0) {
+              const next = [...messagesRef.current, ...fresh].sort(
+                (a, b) => b.message_id - a.message_id
+              );
+              messagesRef.current = next;
+              setMessages(next);
+            }
+          }
+        })
+        .catch(() => {
+          fetchingRepliesRef.current.delete(rid);
+          setReplyTargets((prev) => ({ ...prev, [rid]: null }));
+        });
+    }
+  }, [chatId, replyTargets, messages]);
+
   useSseEvents({
     new_message: (data) => {
       if (data.chat_id !== chatId) return;
@@ -243,8 +424,12 @@ export default function ChatView({
           text: data.text ?? null,
           media_type: data.media_type ?? null,
           file_path: data.file_path ?? null,
+          media_duration: data.media_duration ?? null,
+          media_group_id: data.media_group_id ?? null,
+          media_group_count: data.media_group_count ?? null,
           is_forward: data.is_forward ? 1 : 0,
           fwd_from_author: data.fwd_from_author ?? null,
+          reply_to_message_id: data.reply_to_message_id ?? null,
           is_deleted: 0,
           deleted_at_unix: null,
         },
@@ -260,20 +445,16 @@ export default function ChatView({
     },
     message_edit: (data) => {
       if (data.chat_id !== chatId) return;
-      let changed = false;
       messagesRef.current = messagesRef.current.map((m) =>
         m.chat_id === data.chat_id && m.message_id === data.message_id
           ? { ...m, text: data.new_text ?? m.text }
           : m
       );
-      if (!changed) changed = true;
-      if (changed) {
-        setMessages([...messagesRef.current]);
-        setEditCounts((prev) => ({
-          ...prev,
-          [data.message_id]: (prev[data.message_id] || 0) + 1,
-        }));
-      }
+      setMessages([...messagesRef.current]);
+      setEditCounts((prev) => ({
+        ...prev,
+        [data.message_id]: (prev[data.message_id] || 0) + 1,
+      }));
     },
     message_delete: (data) => {
       if (data.chat_id !== chatId) return;
@@ -283,6 +464,21 @@ export default function ChatView({
           : m
       );
       setMessages([...messagesRef.current]);
+      setDeletedMsgs((prev) => {
+        if (prev.some((d) => d.message_id === data.message_id)) return prev;
+        const msg = messagesRef.current.find((m) => m.message_id === data.message_id);
+        return [
+          {
+            message_id: data.message_id,
+            deleted_at_unix: Math.floor(Date.now() / 1000),
+            old_text: msg?.text ?? null,
+            old_sender_name: msg?.sender_name ?? null,
+            old_date_unix: msg?.date_unix ?? null,
+            old_media_type: msg?.media_type ?? null,
+          },
+          ...prev,
+        ];
+      });
     },
     media_ready: (data) => {
       if (data.chat_id !== chatId) return;
@@ -462,6 +658,13 @@ export default function ChatView({
                       showSender={item.showSender}
                       chatType={chatType}
                       editCount={editCounts[item.msg.message_id]}
+                      replyTarget={
+                        item.msg.reply_to_message_id != null
+                          ? replyTargets[item.msg.reply_to_message_id]
+                          : undefined
+                      }
+                      onJumpToReply={jumpToMessage}
+                      albumDeletedLeader={albumBadgeLeaders.has(item.msg.message_id)}
                     />
                   </div>
                 );

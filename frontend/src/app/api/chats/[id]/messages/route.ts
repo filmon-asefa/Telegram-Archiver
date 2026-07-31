@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getMessages } from "@/lib/db";
+import { getMessages, getMessagesAround } from "@/lib/db";
 import { sanitizeText } from "@/lib/utils";
 
 export async function GET(
@@ -14,11 +14,20 @@ export async function GET(
 
   const limit = parseInt(req.nextUrl.searchParams.get("limit") || "50", 10);
   const before = req.nextUrl.searchParams.get("before");
+  const around = req.nextUrl.searchParams.get("around");
   const beforeId = before ? parseInt(before, 10) : undefined;
+  const aroundId = around ? parseInt(around, 10) : undefined;
 
-  const messages = getMessages(chatId, limit, beforeId).map((m) => ({
-    ...m,
-    text: sanitizeText(m.text),
-  }));
-  return NextResponse.json(messages);
+  let messages: ReturnType<typeof getMessages>;
+  if (aroundId) {
+    messages = getMessagesAround(chatId, aroundId, limit);
+  } else {
+    messages = getMessages(chatId, limit, beforeId);
+  }
+  return NextResponse.json(
+    messages.map((m) => ({
+      ...m,
+      text: sanitizeText(m.text),
+    }))
+  );
 }

@@ -16,6 +16,18 @@ from .utils.media_storage import get_storage_path
 logger = logging.getLogger(__name__)
 
 
+def get_media_duration(message: Message) -> Optional[int]:
+    """Return the media duration in seconds for voice/audio/video media, else None."""
+    for attr in ("voice", "video", "video_note", "audio"):
+        obj = getattr(message, attr, None)
+        if obj is not None and getattr(obj, "duration", None):
+            try:
+                return int(obj.duration)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def classify_media(message: Message) -> Optional[str]:
     """Determine the media-type folder for *message*.
 

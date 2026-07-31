@@ -33,11 +33,14 @@ CREATE TABLE IF NOT EXISTS messages (
     text TEXT,
     media_type TEXT,              -- 'photos' | 'videos' | 'voice' | 'documents' | 'audio' | 'stickers' | 'animations' | 'contacts' | 'locations' | 'polls' | 'other' | NULL
     file_path TEXT,
+    media_duration INTEGER,       -- seconds, for voice/audio/video media
+    media_group_id INTEGER,       -- Telegram album/group id (message.grouped_id)
     is_forward INTEGER NOT NULL DEFAULT 0,
     fwd_from_chat_id INTEGER,
     fwd_from_msg_id INTEGER,
     fwd_from_date INTEGER,
     fwd_from_author TEXT,
+    reply_to_message_id INTEGER,          -- message this one replies to, if any
     is_deleted INTEGER NOT NULL DEFAULT 0,
     deleted_at_unix INTEGER,
     PRIMARY KEY (chat_id, message_id)
@@ -144,6 +147,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             pass  # column already exists
 
+    # reply_to_message_id added later
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER")
+        logger.info("Migrated: added messages.reply_to_message_id")
+    except sqlite3.OperationalError:
+        pass
+
     # is_deleted / deleted_at_unix added later
     for table in ("messages", "message_snapshot"):
         for col, col_type in (("is_deleted", "INTEGER NOT NULL DEFAULT 0"), ("deleted_at_unix", "INTEGER")):
@@ -152,6 +162,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 logger.info("Migrated: added %s.%s", table, col)
             except sqlite3.OperationalError:
                 pass
+
+    # media metadata added later (contextual deleted-message placeholders)
+    for col, col_type in (("media_duration", "INTEGER"), ("media_group_id", "INTEGER")):
+        try:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
+            logger.info("Migrated: added messages.%s", col)
+        except sqlite3.OperationalError:
+            pass
 
 
 def upsert_chat(chat_id: int, chat_name: str, chat_type: str) -> None:
@@ -195,20 +213,24 @@ def insert_message(
     text: Optional[str],
     media_type: Optional[str],
     file_path: Optional[str],
+    media_duration: Optional[int] = None,
+    media_group_id: Optional[int] = None,
     is_forward: bool = False,
     fwd_from_chat_id: Optional[int] = None,
     fwd_from_msg_id: Optional[int] = None,
     fwd_from_date: Optional[int] = None,
     fwd_from_author: Optional[str] = None,
+    reply_to_message_id: Optional[int] = None,
 ) -> None:
     conn = get_connection()
     conn.execute(
         """
         INSERT OR IGNORE INTO messages
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
-             date_unix, text, media_type, file_path,
-             is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             date_unix, text, media_type, file_path, media_duration, media_group_id,
+             is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author,
+             reply_to_message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             chat_id,
@@ -220,11 +242,14 @@ def insert_message(
             text,
             media_type,
             file_path,
+            media_duration,
+            media_group_id,
             int(is_forward),
             fwd_from_chat_id,
             fwd_from_msg_id,
             fwd_from_date,
             fwd_from_author,
+            reply_to_message_id,
         ),
     )
 

@@ -26,6 +26,7 @@ from .telegram_client import (
     classify_media,
     download_with_retry,
     extract_forward_info,
+    get_media_duration,
     sender_display_name,
     start_client,
 )
@@ -88,6 +89,9 @@ def register_handlers(client) -> None:
             _text = message.text
             _mtype = media_type
             _chat_type = chat.__class__.__name__.lower()
+            _reply_to = getattr(message, "reply_to_msg_id", None)
+            _duration = get_media_duration(message)
+            _group_id = getattr(message, "grouped_id", None)
 
             def _write():
                 db.upsert_chat(_cid, chat_name, _chat_type)
@@ -101,6 +105,9 @@ def register_handlers(client) -> None:
                     text=_text,
                     media_type=_mtype,
                     file_path=None,
+                    media_duration=_duration,
+                    media_group_id=_group_id,
+                    reply_to_message_id=_reply_to,
                     **fwd,
                 )
                 db.set_last_synced_message_id(_cid, _mid)
@@ -119,8 +126,11 @@ def register_handlers(client) -> None:
                 "text": _text,
                 "media_type": media_type,
                 "file_path": None,
+                "media_duration": _duration,
+                "media_group_id": _group_id,
                 "is_forward": fwd.get("is_forward", False),
                 "fwd_from_author": fwd.get("fwd_from_author"),
+                "reply_to_message_id": _reply_to,
             })
 
             if media_type is not None and settings.download_media:
@@ -261,6 +271,9 @@ async def _initial_backfill(client) -> None:
                         text=message.text,
                         media_type=media_type,
                         file_path=None,
+                        media_duration=get_media_duration(message),
+                        media_group_id=getattr(message, "grouped_id", None),
+                        reply_to_message_id=getattr(message, "reply_to_msg_id", None),
                         **fwd,
                     )
                     highest_seen = max(highest_seen, message.id)
@@ -378,6 +391,9 @@ async def _catchup_loop(client) -> None:
                             text=message.text,
                             media_type=media_type,
                             file_path=None,
+                            media_duration=get_media_duration(message),
+                            media_group_id=getattr(message, "grouped_id", None),
+                            reply_to_message_id=getattr(message, "reply_to_msg_id", None),
                             **fwd,
                         )
                         highest_seen = max(highest_seen, message.id)

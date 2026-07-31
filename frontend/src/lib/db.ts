@@ -36,8 +36,12 @@ export interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  media_duration: number | null;
+  media_group_id: number | null;
+  media_group_count: number | null;
   is_forward: number;
   fwd_from_author: string | null;
+  reply_to_message_id: number | null;
   is_deleted: number;
   deleted_at_unix: number | null;
 }
@@ -55,6 +59,33 @@ export function queryAll<T>(sql: string, params?: (string | number | null)[]): T
   return rows as T[];
 }
 
+const MESSAGE_COLUMNS = `m.chat_id, m.message_id, m.sender_id, m.sender_name, m.is_outgoing,
+  m.date_unix, m.text, m.media_type, m.file_path, m.media_duration, m.media_group_id,
+  m.is_forward, m.fwd_from_chat_id, m.fwd_from_msg_id, m.fwd_from_date, m.fwd_from_author,
+  m.reply_to_message_id, m.is_deleted, m.deleted_at_unix, m.downloaded_at_unix,
+  (SELECT COUNT(*) FROM messages g
+     WHERE g.chat_id = m.chat_id AND g.media_group_id IS NOT NULL AND g.media_group_id = m.media_group_id
+  ) AS media_group_count`;
+
+const MESSAGE_SELECT = `SELECT ${MESSAGE_COLUMNS} FROM messages m`;
+
+const DELETED_PREVIEW = `CASE WHEN m.is_deleted = 1 THEN '🗑 Deleted ' || (
+  CASE
+    WHEN m.media_type IS NULL THEN COALESCE(m.text, '')
+    WHEN m.media_type = 'photos' THEN 'Photo'
+    WHEN m.media_type = 'videos' THEN 'Video'
+    WHEN m.media_type = 'voice' THEN 'Voice message'
+    WHEN m.media_type = 'audio' THEN 'Audio'
+    WHEN m.media_type = 'documents' THEN 'Document'
+    WHEN m.media_type = 'stickers' THEN 'Sticker'
+    WHEN m.media_type = 'animations' THEN 'GIF'
+    WHEN m.media_type = 'locations' THEN 'Location'
+    WHEN m.media_type = 'contacts' THEN 'Contact'
+    WHEN m.media_type = 'polls' THEN 'Poll'
+    ELSE 'Message'
+  END
+) ELSE m.text END`;
+
 function queryOne<T>(sql: string, params?: (string | number | null)[]): T | undefined {
   const db = getDb();
   const stmt = db.prepare(sql);
@@ -67,7 +98,7 @@ export function getChats(search?: string): Chat[] {
     return queryAll<Chat>(
       `SELECT c.chat_id, c.chat_name, c.chat_type, c.last_synced_message_id,
        (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS message_count,
-       (SELECT text FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
+       (SELECT ${DELETED_PREVIEW} FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
        (SELECT date_unix FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_date
        FROM chats c WHERE c.chat_name LIKE ? ORDER BY last_message_date DESC`,
       [`%${search}%`]
@@ -76,7 +107,7 @@ export function getChats(search?: string): Chat[] {
   return queryAll<Chat>(
     `SELECT c.chat_id, c.chat_name, c.chat_type, c.last_synced_message_id,
      (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS message_count,
-     (SELECT text FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
+     (SELECT ${DELETED_PREVIEW} FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
      (SELECT date_unix FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_date
      FROM chats c ORDER BY last_message_date DESC`
   );
@@ -86,7 +117,7 @@ export function getChat(chatId: number): Chat | undefined {
   return queryOne<Chat>(
     `SELECT c.chat_id, c.chat_name, c.chat_type, c.last_synced_message_id,
      (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS message_count,
-     (SELECT text FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
+     (SELECT ${DELETED_PREVIEW} FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
      (SELECT date_unix FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_date
      FROM chats c WHERE c.chat_id = ?`,
     [chatId]
@@ -100,14 +131,30 @@ export function getMessages(
 ): Message[] {
   if (before) {
     return queryAll<Message>(
-      `SELECT * FROM messages WHERE chat_id = ? AND message_id < ? ORDER BY message_id DESC LIMIT ?`,
+      `${MESSAGE_SELECT} WHERE m.chat_id = ? AND m.message_id < ? ORDER BY m.message_id DESC LIMIT ?`,
       [chatId, before, limit]
     );
   }
   return queryAll<Message>(
-    `SELECT * FROM messages WHERE chat_id = ? ORDER BY message_id DESC LIMIT ?`,
+    `${MESSAGE_SELECT} WHERE m.chat_id = ? ORDER BY m.message_id DESC LIMIT ?`,
     [chatId, limit]
   );
+}
+
+export function getMessagesAround(
+  chatId: number,
+  messageId: number,
+  limit = 50
+): Message[] {
+  const before = queryAll<Message>(
+    `${MESSAGE_SELECT} WHERE m.chat_id = ? AND m.message_id <= ? ORDER BY m.message_id DESC LIMIT ?`,
+    [chatId, messageId, limit]
+  );
+  const after = queryAll<Message>(
+    `${MESSAGE_SELECT} WHERE m.chat_id = ? AND m.message_id > ? ORDER BY m.message_id ASC LIMIT ?`,
+    [chatId, messageId, limit]
+  );
+  return [...after.reverse(), ...before];
 }
 
 export function getSenders(chatId: number): Sender[] {
@@ -127,7 +174,7 @@ export function searchMessages(
   dateFrom?: number,
   dateTo?: number
 ): (Message & { chat_name: string })[] {
-  let sql = `SELECT m.*, c.chat_name FROM messages m JOIN chats c ON c.chat_id = m.chat_id WHERE m.text LIKE ?`;
+  let sql = `SELECT ${MESSAGE_COLUMNS}, c.chat_name FROM messages m JOIN chats c ON c.chat_id = m.chat_id WHERE m.text LIKE ?`;
   const params: (string | number)[] = [`%${q}%`];
 
   if (chatId) {

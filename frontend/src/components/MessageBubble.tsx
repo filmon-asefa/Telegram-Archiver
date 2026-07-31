@@ -14,8 +14,12 @@ interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  media_duration: number | null;
+  media_group_id: number | null;
+  media_group_count: number | null;
   is_forward: number;
   fwd_from_author: string | null;
+  reply_to_message_id: number | null;
   is_deleted: number;
   deleted_at_unix: number | null;
 }
@@ -29,6 +33,86 @@ interface Edit {
 const isPdf = (path: string) => path.toLowerCase().endsWith(".pdf");
 const isVideoExt = (path: string) => /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(path);
 const isImageExt = (path: string) => /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(path);
+
+function deletedBadgeText(message: Message): string {
+  if (message.media_type === "stickers") return "Deleted";
+  return "🗑 Deleted on Telegram";
+}
+
+const DeletedBadge = ({ text, overlay }: { text: string; overlay?: boolean }) => (
+  <span
+    className={`deleted-badge${overlay ? " deleted-badge-overlay" : ""}`}
+    title="This message was deleted on Telegram"
+  >
+    {text}
+  </span>
+);
+
+function replyPreviewText(target: Message): { text: string; italic?: boolean } {
+  if (target.text) return { text: target.text };
+  const filename = target.file_path?.split("/").pop();
+  const labels: Record<string, string> = {
+    photos: "Photo",
+    videos: "Video",
+    voice: "Voice Message",
+    audio: "Audio",
+    documents: filename || "Document",
+    stickers: "Sticker",
+    animations: "GIF",
+    contacts: "Contact",
+    locations: "Location",
+    polls: "Poll",
+  };
+  const label = target.media_type ? labels[target.media_type] ?? "File" : "Message";
+  return { text: `${getMediaIcon(target.media_type)} ${label}` };
+}
+
+function ReplyHeader({
+  target,
+  onJumpToReply,
+}: {
+  target?: Message | null;
+  onJumpToReply?: (messageId: number) => void;
+}) {
+  const preview = target === null
+    ? { text: "Original message unavailable.", italic: true }
+    : target
+      ? replyPreviewText(target)
+      : { text: "…", italic: false };
+
+  const jump = () => {
+    if (target) onJumpToReply?.(target.message_id);
+  };
+
+  return (
+    <div
+      className="reply-header"
+      style={{ borderLeftColor: target ? getSenderColor(target.sender_name || "Unknown") : "var(--border)" }}
+      role={target ? "button" : undefined}
+      tabIndex={target ? 0 : undefined}
+      onClick={jump}
+      onKeyDown={(e) => {
+        if (target && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          jump();
+        }
+      }}
+      title={target ? "View original message" : undefined}
+    >
+      {target && target.sender_name && (
+        <div
+          className="reply-header-sender"
+          style={{ color: getSenderColor(target.sender_name) }}
+        >
+          {target.sender_name}
+        </div>
+      )}
+      <div className={`reply-header-preview ${preview.italic ? "reply-header-muted" : ""}`}>
+        <span className="truncate">{preview.text}</span>
+      </div>
+    </div>
+  );
+}
 
 const MediaPreview = memo(function MediaPreview({ filePath, mediaType }: { filePath: string; mediaType: string }) {
   const [errored, setErrored] = useState(false);
@@ -178,11 +262,17 @@ export default function MessageBubble({
   showSender,
   chatType,
   editCount,
+  replyTarget,
+  onJumpToReply,
+  albumDeletedLeader = false,
 }: {
   message: Message;
   showSender: boolean;
   chatType?: string;
   editCount?: number;
+  replyTarget?: Message | null;
+  onJumpToReply?: (messageId: number) => void;
+  albumDeletedLeader?: boolean;
 }) {
   const [showEdits, setShowEdits] = useState(false);
   const [edits, setEdits] = useState<Edit[] | null>(null);
@@ -200,6 +290,15 @@ export default function MessageBubble({
   const isDeleted = message.is_deleted === 1;
   const shouldShowName = showSender && !isOutgoing && message.sender_name && !isUser;
   const wasEdited = editCount !== undefined && editCount > 0;
+
+  const isAlbum = (message.media_group_count ?? 0) > 1;
+  const showDeletedBadge = isDeleted && (!isAlbum || albumDeletedLeader);
+  const deletedBadgeLabel =
+    message.media_type === "stickers"
+      ? "Deleted"
+      : isAlbum && albumDeletedLeader
+        ? "🗑 Album deleted on Telegram"
+        : "🗑 Deleted on Telegram";
 
   const toggleEdits = async () => {
     if (showEdits) {
@@ -230,8 +329,8 @@ export default function MessageBubble({
       className={`flex mb-[2px] ${isChannel ? "px-[5%]" : "px-[10%]"} ${isOutgoing ? "justify-end" : "justify-start"}`}
     >
       <div
-        className={`message-bubble ${isOutgoing ? "out" : "in"} ${isVoice ? "voice-bubble" : ""}`}
-        style={{ minWidth: isDeleted ? "320px" : (hasMedia || hasPendingMedia) && !isVoice ? "280px" : undefined }}
+        className={`message-bubble ${isOutgoing ? "out" : "in"} ${isVoice ? "voice-bubble" : ""} ${isDeleted ? "deleted-bubble" : ""}`}
+        style={{ minWidth: (hasMedia || hasPendingMedia) && !isVoice ? "280px" : undefined }}
       >
         {!isVoice && <div className={isOutgoing ? "message-tail-out" : "message-tail-in"} />}
 
@@ -256,78 +355,80 @@ export default function MessageBubble({
           </div>
         )}
 
-        {!isDeleted && isVoice && (hasMedia || hasPendingMedia) && (
-          <VoiceMessage
-            message={message}
-            isOutgoing={isOutgoing}
-            wasEdited={wasEdited}
-            onToggleEdits={toggleEdits}
-          />
+        {message.reply_to_message_id != null && (
+          <ReplyHeader target={replyTarget} onJumpToReply={onJumpToReply} />
         )}
 
-        {!isDeleted && hasMedia && !isVoice && (
-          <MediaPreview filePath={message.file_path!} mediaType={message.media_type!} />
-        )}
-
-        {!isDeleted && hasPendingMedia && !isVoice && (
-          <div
-            className="mt-1 flex items-center gap-2 text-xs rounded-lg px-3 py-2 opacity-50"
-            style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}
-          >
-            <span>{getMediaIcon(message.media_type!)}</span>
-            <span className="truncate">{message.media_type} — downloading…</span>
+        {isVoice && (hasMedia || hasPendingMedia) && (
+          <div className="flex flex-col gap-1">
+            {showDeletedBadge && <DeletedBadge text={deletedBadgeLabel} />}
+            <div className={isDeleted ? "deleted-fade" : undefined}>
+              <VoiceMessage
+                message={message}
+                isOutgoing={isOutgoing}
+                wasEdited={wasEdited}
+                onToggleEdits={toggleEdits}
+              />
+            </div>
           </div>
         )}
 
-        <div className={`flex items-end gap-2 ${isDeleted ? "opacity-75" : ""}`}>
-          {isDeleted && (
-            <div className="w-full rounded-lg px-3 py-2 -mx-3 deleted-fade-in" style={{ background: "rgba(255,80,80,0.06)", borderLeft: "3px solid rgba(255,80,80,0.5)" }}>
-              {hasMedia && (
-                <div className="flex items-center gap-1.5 text-xs line-through opacity-60 mb-1" style={{ color: "var(--text-secondary)" }}>
-                  <span>{getMediaIcon(message.media_type!)}</span>
-                  <span className="truncate">{message.media_type}</span>
-                </div>
-              )}
-              {hasText && (
-                <div className="w-full line-through opacity-60" style={{ color: "var(--text-secondary, #888)" }}>
-                  <p className="text-[14.5px] whitespace-pre-wrap break-words">{message.text}</p>
-                </div>
-              )}
-              <div className="flex items-center gap-1.5 text-[11px] mt-[3px]">
-                <span className="font-semibold uppercase tracking-wider" style={{ color: "rgba(255,80,80,0.8)" }}>Deleted</span>
-                <span className="line-through" style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}>{formatTime(message.date_unix)}</span>
-              </div>
+        {hasMedia && !isVoice && (
+          <div className="relative w-fit max-w-full">
+            {showDeletedBadge && <DeletedBadge text={deletedBadgeLabel} overlay />}
+            <div className={isDeleted ? "deleted-fade" : undefined}>
+              <MediaPreview filePath={message.file_path!} mediaType={message.media_type!} />
             </div>
-          )}
-          {!isDeleted && (
-            <>
-              {hasText && !isVoice && (
-                <p className="text-[14.5px] whitespace-pre-wrap break-words" style={{ color: "var(--text-primary)" }}>
-                  {message.text}
-                </p>
+          </div>
+        )}
+
+        {hasPendingMedia && !isVoice && (
+          <div className="relative w-fit max-w-full">
+            {showDeletedBadge && <DeletedBadge text={deletedBadgeLabel} overlay />}
+            <div
+              className={`mt-1 flex items-center gap-2 text-xs rounded-lg px-3 py-2 ${isDeleted ? "deleted-fade" : ""}`}
+              style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}
+            >
+              <span>{getMediaIcon(message.media_type!)}</span>
+              <span className="truncate">{message.media_type} — downloading…</span>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-end gap-2">
+          <div className="flex flex-col gap-1 min-w-0">
+            {showDeletedBadge && !hasMedia && !hasPendingMedia && (
+              <DeletedBadge text={deletedBadgeLabel} />
+            )}
+            {hasText && !isVoice && (
+              <p
+                className={`text-[14.5px] whitespace-pre-wrap break-words ${isDeleted ? "deleted-text" : ""}`}
+                style={{ color: "var(--text-primary)" }}
+              >
+                {message.text}
+              </p>
+            )}
+            {hasText && isVoice && (
+              <p className={`voice-caption ${isDeleted ? "deleted-text" : ""}`} style={{ color: "var(--text-primary)" }}>
+                {message.text}
+              </p>
+            )}
+          </div>
+          {(hasText || (!hasMedia && !hasPendingMedia)) && !isVoice && (
+            <span
+              className="text-[11px] whitespace-nowrap shrink-0 flex items-center gap-[2px] self-end pb-[1px]"
+              style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
+            >
+              {wasEdited && (
+                <span className="cursor-pointer hover:underline mr-[3px]" onClick={toggleEdits} title="View edit history">edited</span>
               )}
-              {hasText && isVoice && (
-                <p className="voice-caption" style={{ color: "var(--text-primary)" }}>
-                  {message.text}
-                </p>
-              )}
-              {!isVoice && (
-                <span
-                  className="text-[11px] whitespace-nowrap shrink-0 flex items-center gap-[2px] self-end pb-[1px]"
-                  style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
-                >
-                  {wasEdited && (
-                    <span className="cursor-pointer hover:underline mr-[3px]" onClick={toggleEdits} title="View edit history">edited</span>
-                  )}
-                  {formatTime(message.date_unix)}
-                  {isOutgoing && <CheckMark />}
-                </span>
-              )}
-            </>
+              {formatTime(message.date_unix)}
+              {isOutgoing && <CheckMark />}
+            </span>
           )}
         </div>
 
-        {(hasMedia || hasPendingMedia) && !hasText && !isDeleted && !isVoice && (
+        {(hasMedia || hasPendingMedia) && !hasText && !isVoice && (
           <div
             className="text-[11px] text-right mt-[2px] flex items-center justify-end gap-[2px]"
             style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}

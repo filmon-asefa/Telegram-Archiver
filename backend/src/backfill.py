@@ -24,6 +24,7 @@ from .telegram_client import (
     classify_media,
     download_with_retry,
     extract_forward_info,
+    get_media_duration,
     sender_display_name,
     start_client,
 )
@@ -77,6 +78,9 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
                 text=message.text,
                 media_type=media_type,
                 file_path=file_path,
+                media_duration=get_media_duration(message),
+                media_group_id=getattr(message, "grouped_id", None),
+                reply_to_message_id=getattr(message, "reply_to_msg_id", None),
                 **fwd,
             )
             highest_seen = max(highest_seen, message.id)
