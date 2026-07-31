@@ -9,6 +9,7 @@ import {
   getAvatarColor,
   getInitials,
 } from "@/lib/utils";
+import { useSseEvents } from "@/lib/useSseEvents";
 
 interface Chat {
   chat_id: number;
@@ -65,9 +66,18 @@ export default function ChatList() {
 
   useEffect(() => {
     fetchChats();
-    const interval = setInterval(() => fetchChats(), 3000);
-    return () => clearInterval(interval);
   }, [fetchChats]);
+
+  const refreshOnEvent = useCallback(() => {
+    fetchChats();
+  }, [fetchChats]);
+
+  useSseEvents({
+    new_message: refreshOnEvent,
+    message_edit: refreshOnEvent,
+    message_delete: refreshOnEvent,
+    media_ready: refreshOnEvent,
+  });
 
   useEffect(() => {
     const timer = setTimeout(() => {

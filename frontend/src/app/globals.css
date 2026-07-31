@@ -126,3 +126,150 @@ body {
     opacity: 1;
   }
 }
+
+/* Telegram Desktop-style voice message */
+.message-bubble.voice-bubble {
+  padding: 8px 12px;
+  border-radius: 18px;
+  width: min(380px, 84vw);
+  max-width: min(420px, 92vw);
+}
+
+.message-bubble.voice-bubble.out {
+  border-bottom-right-radius: 18px;
+}
+
+.message-bubble.voice-bubble.in {
+  border-bottom-left-radius: 18px;
+}
+
+.voice-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.voice-play-btn {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: transparent;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.voice-play-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(1.06);
+}
+
+.voice-play-btn:active {
+  transform: scale(0.95);
+}
+
+.voice-play-btn:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+.voice-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+}
+
+.voice-waveform {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  width: 100%;
+  min-width: 0;
+  cursor: default;
+  outline: none;
+  border-radius: 4px;
+}
+
+.voice-waveform:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+.voice-bar {
+  width: 3px;
+  border-radius: 1.5px;
+  flex-shrink: 0;
+  transition: background-color 0.12s ease-out;
+}
+
+@keyframes voiceBarPulse {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.7);
+  }
+}
+
+.voice-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.voice-time {
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+}
+
+.voice-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 16px;
+}
+
+.voice-edited {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  font-family: inherit;
+}
+
+.voice-edited:hover {
+  text-decoration: underline;
+}
+
+.voice-edited:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.voice-caption {
+  font-size: 14.5px;
+  line-height: 1.3;
+  margin: 4px 0 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  width: 100%;
+}

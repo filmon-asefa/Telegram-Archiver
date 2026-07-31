@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import MessageBubble from "@/components/MessageBubble";
 import { formatDateSeparator, getAvatarColor, getInitials } from "@/lib/utils";
+import { useSseEvents } from "@/lib/useSseEvents";
 
 interface ChatInfo {
   chat_id: number;
@@ -76,7 +77,6 @@ export default function ChatView({
   const messagesRef = useRef<Message[]>([]);
   const [editCounts, setEditCounts] = useState<Record<number, number>>({});
   const [deletedMsgs, setDeletedMsgs] = useState<DeletedMsg[]>([]);
-  const lastPollRef = useRef(0);
   const [showDeleted, setShowDeleted] = useState(false);
 
   useEffect(() => {
@@ -223,86 +223,80 @@ export default function ChatView({
       .catch(() => {});
   }, [chatId]);
 
-  useEffect(() => {
-    if (!chatId) return;
-    const interval = setInterval(async () => {
-      const now = Math.floor(Date.now() / 1000);
-      try {
-        const res = await fetch(`/api/changes?since=${lastPollRef.current || now - 5}`);
-        if (res.ok) {
-          const changes = await res.json();
-          lastPollRef.current = now;
-
-          if (changes.newMessages?.length > 0) {
-            const chatNew = changes.newMessages.filter((m: Message) => m.chat_id === chatId);
-            if (chatNew.length > 0) {
-              const seen = new Set(messagesRef.current.map((m) => m.message_id));
-              const fresh = chatNew.filter((m: Message) => !seen.has(m.message_id));
-              if (fresh.length > 0) {
-                const container = containerRef.current;
-                const wasAtBottom = container
-                  ? container.scrollHeight - container.scrollTop - container.clientHeight < 80
-                  : true;
-                const next = [...fresh, ...messagesRef.current];
-                messagesRef.current = next;
-                setMessages(next);
-                if (wasAtBottom) {
-                  requestAnimationFrame(() => {
-                    if (container) container.scrollTop = container.scrollHeight;
-                  });
-                }
-              }
-            }
-          }
-
-          if (changes.edits?.length > 0) {
-            const editMap: Record<number, number> = { ...editCounts };
-            for (const e of changes.edits) {
-              if (e.chat_id === chatId) {
-                editMap[e.message_id] = (editMap[e.message_id] || 0) + 1;
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.chat_id === e.chat_id && m.message_id === e.message_id
-                      ? { ...m, text: e.new_text }
-                      : m
-                  )
-                );
-              }
-            }
-            setEditCounts(editMap);
-          }
-
-          if (changes.deletions?.length > 0) {
-            for (const d of changes.deletions) {
-              if (d.chat_id === chatId) {
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.chat_id === d.chat_id && m.message_id === d.message_id
-                      ? { ...m, is_deleted: 1, deleted_at_unix: d.deleted_at_unix, text: d.old_text ?? m.text }
-                      : m
-                  )
-                );
-                setDeletedMsgs((prev) => [
-                  {
-                    message_id: d.message_id,
-                    deleted_at_unix: d.deleted_at_unix,
-                    old_text: d.old_text,
-                    old_sender_name: d.old_sender_name,
-                    old_date_unix: null,
-                    old_media_type: d.old_media_type,
-                  },
-                  ...prev,
-                ]);
-              }
-            }
-          }
-        }
-      } catch {
-        // Poll failure is non-critical
+  useSseEvents({
+    new_message: (data) => {
+      if (data.chat_id !== chatId) return;
+      const seen = new Set(messagesRef.current.map((m) => m.message_id));
+      if (seen.has(data.message_id)) return;
+      const container = containerRef.current;
+      const wasAtBottom = container
+        ? container.scrollHeight - container.scrollTop - container.clientHeight < 80
+        : true;
+      const next = [
+        {
+          chat_id: data.chat_id,
+          message_id: data.message_id,
+          sender_id: data.sender_id ?? null,
+          sender_name: data.sender_name ?? null,
+          is_outgoing: data.is_outgoing ? 1 : 0,
+          date_unix: data.date_unix,
+          text: data.text ?? null,
+          media_type: data.media_type ?? null,
+          file_path: data.file_path ?? null,
+          is_forward: data.is_forward ? 1 : 0,
+          fwd_from_author: data.fwd_from_author ?? null,
+          is_deleted: 0,
+          deleted_at_unix: null,
+        },
+        ...messagesRef.current,
+      ];
+      messagesRef.current = next;
+      setMessages(next);
+      if (wasAtBottom) {
+        requestAnimationFrame(() => {
+          if (container) container.scrollTop = container.scrollHeight;
+        });
       }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [chatId, editCounts]);
+    },
+    message_edit: (data) => {
+      if (data.chat_id !== chatId) return;
+      let changed = false;
+      messagesRef.current = messagesRef.current.map((m) =>
+        m.chat_id === data.chat_id && m.message_id === data.message_id
+          ? { ...m, text: data.new_text ?? m.text }
+          : m
+      );
+      if (!changed) changed = true;
+      if (changed) {
+        setMessages([...messagesRef.current]);
+        setEditCounts((prev) => ({
+          ...prev,
+          [data.message_id]: (prev[data.message_id] || 0) + 1,
+        }));
+      }
+    },
+    message_delete: (data) => {
+      if (data.chat_id !== chatId) return;
+      messagesRef.current = messagesRef.current.map((m) =>
+        m.chat_id === data.chat_id && m.message_id === data.message_id
+          ? { ...m, is_deleted: 1, deleted_at_unix: Math.floor(Date.now() / 1000) }
+          : m
+      );
+      setMessages([...messagesRef.current]);
+    },
+    media_ready: (data) => {
+      if (data.chat_id !== chatId) return;
+      let changed = false;
+      messagesRef.current = messagesRef.current.map((m) => {
+        if (m.chat_id === data.chat_id && m.message_id === data.message_id && m.file_path !== data.file_path) {
+          changed = true;
+          return { ...m, file_path: data.file_path };
+        }
+        return m;
+      });
+      if (changed) setMessages([...messagesRef.current]);
+    },
+  });
 
   if (loading) {
     return (

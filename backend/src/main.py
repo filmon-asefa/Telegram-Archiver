@@ -20,6 +20,7 @@ from . import db
 from .backfill import run_backfill, run_media_download
 from .forward_fix import run_resolve
 from .listener import run_listener
+from .reconcile_media import reconcile_media
 from .reorganize_media import reorganize_media
 
 logger = logging.getLogger(__name__)
@@ -56,8 +57,24 @@ def main() -> None:
         action="store_true",
         help="Migrate media into YYYY/<Month>/DD/<Chat Name> [<id>]/<type>/HH-MM-SS_<Sender>_message_<id>.ext, then exit",
     )
+    parser.add_argument(
+        "--scan-media",
+        action="store_true",
+        help="Reconcile messages.file_path against media files already on disk, then exit",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --scan-media: report what would be linked without writing",
+    )
     parser.add_argument("--resolve-forwards", action="store_true", help="Resolve forward source names for existing messages")
     args = parser.parse_args()
+
+    if args.scan_media:
+        summary = reconcile_media(dry_run=args.dry_run)
+        logger.info("Media reconciliation result: %s", summary)
+        db.close()
+        return
 
     if args.reorganize_media:
         count = reorganize_media()

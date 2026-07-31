@@ -25,6 +25,10 @@ PYTHONPATH=backend python3 -m src.main --media-only
 # Reorganize media folders
 PYTHONPATH=backend python3 -m src.main --reorganize-media
 
+# Reconcile messages.file_path against media already on disk
+PYTHONPATH=backend python3 -m src.main --scan-media
+PYTHONPATH=backend python3 -m src.main --scan-media --dry-run
+
 # Resolve forward source names for existing messages
 PYTHONPATH=backend python3 -m src.main --resolve-forwards
 ```
@@ -62,7 +66,7 @@ cd frontend && npx tsc --noEmit
 **Delete:** `events.MessageDeleted` → `save_message_snapshot()` → `record_deletion()` (marks `is_deleted=1`, does NOT delete row)
 
 ### Listener (backend/src/listener.py)
-- `run_listener()` → `register_handlers(client)` → `_initial_backfill()` → listen forever
+- `run_listener()` → `reconcile_media()` (links `file_path` for media already on disk) → `start_sse_server()` → `register_handlers(client)` → `_initial_backfill()` → listen forever
 - Heartbeat every 5min, catch-up cycle every 30min
 - Backfill: `client.iter_messages(dialog, min_id=last_synced, reverse=True)`
 - `_with_db_retry(fn)` — retries DB writes up to 3x on lock errors
@@ -90,6 +94,7 @@ cd frontend && npx tsc --noEmit
 - `frontend/src/lib/db.ts` — server-side SQLite reader (node:sqlite), TypeScript `Message` interface
 - `frontend/src/app/chat/[id]/ChatView.tsx` — chat page, message grouping, polling
 - `frontend/src/components/MessageBubble.tsx` — single message bubble renderer
+- `frontend/src/components/VoiceMessage.tsx` — Telegram Desktop-style voice player (waveform, seek, play/pause, duration, status row)
 - `frontend/src/app/api/changes/route.ts` — polling endpoint for new/edited/deleted messages
 
 ### State Management
@@ -116,6 +121,8 @@ interface Message {
 - `download_with_retry()` in `telegram_client.py` — 120s timeout, 3 retries, flood wait handling
 - Uses `asyncio.wait_for()` and catches `FloodWaitError`
 - Media stored in `data/media/YYYY/Month Name/DD/Chat Name [id]/type/HH-MM-SS_Sender_message_NNNN.ext`
+- `reconcile_media()` in `reconcile_media.py` walks `data/media`, parses chat id + message id + type from folder/filename, and backfills `file_path` for messages whose media exists on disk but is unlinked or stale. Runs automatically at listener startup and via `--scan-media`. `--dry-run` reports without writing.
+- `/media-files` route transcodes voice (Opus-in-Ogg) to AAC `.m4a` on demand via `afconvert` (Safari can't play Ogg/Opus), caching results in `data/media_cache/`.
 
 ## Known Issues
 - `next.config.ts` TypeScript error about `allowedDevOrigins` — pre-existing, harmless

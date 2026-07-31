@@ -19,6 +19,8 @@ from telethon.tl import types
 
 from . import db
 from .config import settings
+from .reconcile_media import reconcile_media
+from .sse_server import broadcast, start_sse_server
 from .telegram_client import (
     build_client,
     classify_media,
@@ -61,6 +63,7 @@ async def _download_and_attach(
             db.update_message_file_path(chat_id, message.id, path)
             db.commit()
         _with_db_retry(_write)
+        broadcast("media_ready", {"chat_id": chat_id, "message_id": message.id, "file_path": path})
 
 
 def register_handlers(client) -> None:
@@ -106,6 +109,20 @@ def register_handlers(client) -> None:
             _with_db_retry(_write)
             logger.info("Saved message chat=%s id=%s type=%s out=%s", chat_id, message.id, media_type or "text", _out)
 
+            broadcast("new_message", {
+                "chat_id": chat_id,
+                "message_id": message.id,
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "is_outgoing": _out,
+                "date_unix": _date,
+                "text": _text,
+                "media_type": media_type,
+                "file_path": None,
+                "is_forward": fwd.get("is_forward", False),
+                "fwd_from_author": fwd.get("fwd_from_author"),
+            })
+
             if media_type is not None and settings.download_media:
                 asyncio.create_task(_download_and_attach(message, chat_id, chat_folder, sender_name))
         except Exception:
@@ -138,6 +155,13 @@ def register_handlers(client) -> None:
                 db.commit()
 
             _with_db_retry(_write_edit)
+
+            broadcast("message_edit", {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "new_text": message.text,
+                "edited_at_unix": int(time.time()),
+            })
 
             media_type = classify_media(message)
             if media_type:
@@ -194,6 +218,8 @@ def register_handlers(client) -> None:
                 db.commit()
 
             _with_db_retry(_write_del)
+            for msg_id in event.deleted_ids:
+                broadcast("message_delete", {"chat_id": chat_id, "message_id": msg_id})
         except Exception:
             logger.exception("Error in MessageDeleted handler for chat=%s", event.chat_id)
 
@@ -424,6 +450,14 @@ async def _heartbeat(client):
 
 
 async def run_listener() -> None:
+    try:
+        summary = reconcile_media()
+        logger.info("Media reconciliation: %s", summary)
+    except Exception:
+        logger.exception("Media reconciliation failed")
+
+    await start_sse_server()
+
     client = build_client()
     await start_client(client)
     register_handlers(client)

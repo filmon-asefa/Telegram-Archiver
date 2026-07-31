@@ -153,3 +153,7 @@ export function getSenderColor(name: string): string {
   }
   return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length];
 }
+
+export function encodeMediaPath(filePath: string): string {
+  return filePath.split("/").map(encodeURIComponent).join("/");
+}

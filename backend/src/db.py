@@ -229,8 +229,8 @@ def insert_message(
     )
 
 
-def update_message_file_path(chat_id: int, message_id: int, file_path: str) -> None:
-    """Used when media downloads finish after the row was already inserted."""
+def update_message_file_path(chat_id: int, message_id: int, file_path: Optional[str]) -> None:
+    """Set a message's media path; pass ``None`` to clear a stale link."""
     conn = get_connection()
     conn.execute(
         "UPDATE messages SET file_path = ? WHERE chat_id = ? AND message_id = ?",

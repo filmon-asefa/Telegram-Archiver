@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { formatTime, getMediaIcon, getSenderColor } from "@/lib/utils";
+import { memo, useState } from "react";
+import { formatTime, getMediaIcon, getSenderColor, encodeMediaPath } from "@/lib/utils";
+import VoiceMessage from "@/components/VoiceMessage";
 
 interface Message {
   chat_id: number;
@@ -25,11 +26,11 @@ interface Edit {
   edited_at_unix: number;
 }
 
-function encodeMediaPath(filePath: string): string {
-  return filePath.split("/").map(encodeURIComponent).join("/");
-}
+const isPdf = (path: string) => path.toLowerCase().endsWith(".pdf");
+const isVideoExt = (path: string) => /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(path);
+const isImageExt = (path: string) => /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(path);
 
-function MediaPreview({ filePath, mediaType }: { filePath: string; mediaType: string }) {
+const MediaPreview = memo(function MediaPreview({ filePath, mediaType }: { filePath: string; mediaType: string }) {
   const [errored, setErrored] = useState(false);
   const src = `/media-files/${encodeMediaPath(filePath)}`;
 
@@ -45,12 +46,30 @@ function MediaPreview({ filePath, mediaType }: { filePath: string; mediaType: st
     );
   }
 
-  if (mediaType === "photos") {
+  // Images, stickers, and GIFs. Telegram GIFs arrive as .gif or muted .mp4,
+  // so video-based animations play inline and loop like an animated image.
+  if (mediaType === "photos" || mediaType === "stickers" || mediaType === "animations") {
+    if (isVideoExt(filePath)) {
+      return (
+        <div className="rounded-lg overflow-hidden max-w-[320px]">
+          <video
+            src={src}
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="metadata"
+            className="max-h-[320px] w-auto"
+            onError={() => setErrored(true)}
+          />
+        </div>
+      );
+    }
     return (
       <div className="rounded-lg overflow-hidden max-w-[320px]">
         <img
           src={src}
-          alt="Photo"
+          alt="Media"
           className="max-h-[320px] w-auto object-cover cursor-pointer"
           loading="lazy"
           onError={() => setErrored(true)}
@@ -87,6 +106,50 @@ function MediaPreview({ filePath, mediaType }: { filePath: string; mediaType: st
     );
   }
 
+  if (mediaType === "documents") {
+    if (isPdf(filePath)) {
+      return (
+        <div className="rounded-lg overflow-hidden max-w-[320px] max-h-[400px]">
+          <embed
+            src={src}
+            type="application/pdf"
+            className="w-full h-[300px] rounded-lg"
+            onError={() => setErrored(true)}
+          />
+        </div>
+      );
+    }
+    if (isVideoExt(filePath)) {
+      return (
+        <div className="rounded-lg overflow-hidden max-w-[320px]">
+          <video
+            src={src}
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="metadata"
+            className="max-h-[320px] w-auto"
+            onError={() => setErrored(true)}
+          />
+        </div>
+      );
+    }
+    if (isImageExt(filePath)) {
+      return (
+        <div className="rounded-lg overflow-hidden max-w-[320px]">
+          <img
+            src={src}
+            alt="Media"
+            className="max-h-[320px] w-auto object-cover cursor-pointer"
+            loading="lazy"
+            onError={() => setErrored(true)}
+          />
+        </div>
+      );
+    }
+  }
+
   return (
     <div
       className="mt-1 flex items-center gap-2 text-xs rounded-lg px-3 py-2"
@@ -96,7 +159,7 @@ function MediaPreview({ filePath, mediaType }: { filePath: string; mediaType: st
       <span className="truncate">{filePath?.split("/").pop()}</span>
     </div>
   );
-}
+});
 
 const CheckMark = () => (
   <svg className="w-[16px] h-[11px] ml-[1px]" viewBox="0 0 16 11" fill="none">
@@ -130,6 +193,7 @@ export default function MessageBubble({
   const isGroup = chatType === "chat";
 
   const isOutgoing = !isChannel && message.is_outgoing === 1;
+  const isVoice = message.media_type === "voice";
   const hasMedia = !!message.file_path && !!message.media_type;
   const hasPendingMedia = !message.file_path && !!message.media_type;
   const hasText = !!message.text;
@@ -166,10 +230,10 @@ export default function MessageBubble({
       className={`flex mb-[2px] ${isChannel ? "px-[5%]" : "px-[10%]"} ${isOutgoing ? "justify-end" : "justify-start"}`}
     >
       <div
-        className={`message-bubble ${isOutgoing ? "out" : "in"}`}
-        style={{ minWidth: isDeleted ? "320px" : (hasMedia || hasPendingMedia) ? "280px" : undefined }}
+        className={`message-bubble ${isOutgoing ? "out" : "in"} ${isVoice ? "voice-bubble" : ""}`}
+        style={{ minWidth: isDeleted ? "320px" : (hasMedia || hasPendingMedia) && !isVoice ? "280px" : undefined }}
       >
-        <div className={isOutgoing ? "message-tail-out" : "message-tail-in"} />
+        {!isVoice && <div className={isOutgoing ? "message-tail-out" : "message-tail-in"} />}
 
         {message.is_forward === 1 && (
           <div
@@ -192,11 +256,20 @@ export default function MessageBubble({
           </div>
         )}
 
-        {hasMedia && !isDeleted && (
+        {!isDeleted && isVoice && (hasMedia || hasPendingMedia) && (
+          <VoiceMessage
+            message={message}
+            isOutgoing={isOutgoing}
+            wasEdited={wasEdited}
+            onToggleEdits={toggleEdits}
+          />
+        )}
+
+        {!isDeleted && hasMedia && !isVoice && (
           <MediaPreview filePath={message.file_path!} mediaType={message.media_type!} />
         )}
 
-        {!isDeleted && hasPendingMedia && (
+        {!isDeleted && hasPendingMedia && !isVoice && (
           <div
             className="mt-1 flex items-center gap-2 text-xs rounded-lg px-3 py-2 opacity-50"
             style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}
@@ -228,26 +301,33 @@ export default function MessageBubble({
           )}
           {!isDeleted && (
             <>
-              {hasText && (
+              {hasText && !isVoice && (
                 <p className="text-[14.5px] whitespace-pre-wrap break-words" style={{ color: "var(--text-primary)" }}>
                   {message.text}
                 </p>
               )}
-              <span
-                className="text-[11px] whitespace-nowrap shrink-0 flex items-center gap-[2px] self-end pb-[1px]"
-                style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
-              >
-                {wasEdited && (
-                  <span className="cursor-pointer hover:underline mr-[3px]" onClick={toggleEdits} title="View edit history">edited</span>
-                )}
-                {formatTime(message.date_unix)}
-                {isOutgoing && <CheckMark />}
-              </span>
+              {hasText && isVoice && (
+                <p className="voice-caption" style={{ color: "var(--text-primary)" }}>
+                  {message.text}
+                </p>
+              )}
+              {!isVoice && (
+                <span
+                  className="text-[11px] whitespace-nowrap shrink-0 flex items-center gap-[2px] self-end pb-[1px]"
+                  style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
+                >
+                  {wasEdited && (
+                    <span className="cursor-pointer hover:underline mr-[3px]" onClick={toggleEdits} title="View edit history">edited</span>
+                  )}
+                  {formatTime(message.date_unix)}
+                  {isOutgoing && <CheckMark />}
+                </span>
+              )}
             </>
           )}
         </div>
 
-        {(hasMedia || hasPendingMedia) && !hasText && !isDeleted && (
+        {(hasMedia || hasPendingMedia) && !hasText && !isDeleted && !isVoice && (
           <div
             className="text-[11px] text-right mt-[2px] flex items-center justify-end gap-[2px]"
             style={{ color: isOutgoing ? "var(--text-time-out)" : "var(--text-time)" }}
