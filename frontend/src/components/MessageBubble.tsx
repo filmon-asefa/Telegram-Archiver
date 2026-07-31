@@ -14,6 +14,8 @@ interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  file_name: string | null;
+  file_size: number | null;
   media_duration: number | null;
   media_group_id: number | null;
   media_group_count: number | null;
@@ -34,6 +36,13 @@ const isPdf = (path: string) => path.toLowerCase().endsWith(".pdf");
 const isVideoExt = (path: string) => /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(path);
 const isImageExt = (path: string) => /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(path);
 
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1 << 30) return `${(bytes / (1 << 30)).toFixed(1)} GB`;
+  if (bytes >= 1 << 20) return `${(bytes / (1 << 20)).toFixed(1)} MB`;
+  if (bytes >= 1 << 10) return `${(bytes / (1 << 10)).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
 function deletedBadgeText(message: Message): string {
   if (message.media_type === "stickers") return "Deleted";
   return "🗑 Deleted on Telegram";
@@ -50,7 +59,7 @@ const DeletedBadge = ({ text, overlay }: { text: string; overlay?: boolean }) =>
 
 function replyPreviewText(target: Message): { text: string; italic?: boolean } {
   if (target.text) return { text: target.text };
-  const filename = target.file_path?.split("/").pop();
+  const filename = target.file_name || target.file_path?.split("/").pop();
   const labels: Record<string, string> = {
     photos: "Photo",
     videos: "Video",
@@ -114,7 +123,17 @@ function ReplyHeader({
   );
 }
 
-const MediaPreview = memo(function MediaPreview({ filePath, mediaType }: { filePath: string; mediaType: string }) {
+const MediaPreview = memo(function MediaPreview({
+  filePath,
+  mediaType,
+  fileName,
+  fileSize,
+}: {
+  filePath: string;
+  mediaType: string;
+  fileName?: string | null;
+  fileSize?: number | null;
+}) {
   const [errored, setErrored] = useState(false);
   const src = `/media-files/${encodeMediaPath(filePath)}`;
 
@@ -235,13 +254,20 @@ const MediaPreview = memo(function MediaPreview({ filePath, mediaType }: { fileP
   }
 
   return (
-    <div
-      className="mt-1 flex items-center gap-2 text-xs rounded-lg px-3 py-2"
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer"
+      className="mt-1 flex items-center gap-2 text-xs rounded-lg px-3 py-2 max-w-[320px]"
       style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }}
+      title={`Open ${fileName || filePath.split("/").pop()}`}
     >
-      <span>{getMediaIcon(mediaType)}</span>
-      <span className="truncate">{filePath?.split("/").pop()}</span>
-    </div>
+      <span className="flex-shrink-0">{getMediaIcon(mediaType)}</span>
+      <span className="truncate font-medium" style={{ color: "var(--accent-color, #3390ec)" }}>
+        {fileName || filePath.split("/").pop()}
+      </span>
+      {fileSize ? <span className="flex-shrink-0 ml-auto pl-2">{formatFileSize(fileSize)}</span> : null}
+    </a>
   );
 });
 
@@ -377,7 +403,12 @@ export default function MessageBubble({
           <div className="relative w-fit max-w-full">
             {showDeletedBadge && <DeletedBadge text={deletedBadgeLabel} overlay />}
             <div className={isDeleted ? "deleted-fade" : undefined}>
-              <MediaPreview filePath={message.file_path!} mediaType={message.media_type!} />
+              <MediaPreview
+                filePath={message.file_path!}
+                mediaType={message.media_type!}
+                fileName={message.file_name}
+                fileSize={message.file_size}
+              />
             </div>
           </div>
         )}

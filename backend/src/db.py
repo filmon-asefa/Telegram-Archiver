@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS messages (
     text TEXT,
     media_type TEXT,              -- 'photos' | 'videos' | 'voice' | 'documents' | 'audio' | 'stickers' | 'animations' | 'contacts' | 'locations' | 'polls' | 'other' | NULL
     file_path TEXT,
+    file_name TEXT,               -- original filename for documents
+    file_size INTEGER,            -- original byte size, if known
     media_duration INTEGER,       -- seconds, for voice/audio/video media
     media_group_id INTEGER,       -- Telegram album/group id (message.grouped_id)
     is_forward INTEGER NOT NULL DEFAULT 0,
@@ -191,6 +193,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     # media metadata added later (contextual deleted-message placeholders)
     for col, col_type in (("media_duration", "INTEGER"), ("media_group_id", "INTEGER"), ("downloaded_at_unix", "INTEGER")):
+        try:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
+            logger.info("Migrated: added messages.%s", col)
+        except sqlite3.OperationalError:
+            pass
+
+    # original filename/size for documents
+    for col, col_type in (("file_name", "TEXT"), ("file_size", "INTEGER")):
         try:
             conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
             logger.info("Migrated: added messages.%s", col)
@@ -357,6 +367,8 @@ def insert_message(
     fwd_from_author: Optional[str] = None,
     reply_to_message_id: Optional[int] = None,
     topic_id: Optional[int] = None,
+    file_name: Optional[str] = None,
+    file_size: Optional[int] = None,
 ) -> None:
     conn = get_connection()
     conn.execute(
@@ -365,11 +377,13 @@ def insert_message(
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
              date_unix, text, media_type, file_path, media_duration, media_group_id,
              is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author,
-             reply_to_message_id, topic_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             reply_to_message_id, topic_id, file_name, file_size)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chat_id, message_id) DO UPDATE SET
             topic_id = excluded.topic_id,
-            reply_to_message_id = excluded.reply_to_message_id
+            reply_to_message_id = excluded.reply_to_message_id,
+            file_name = COALESCE(excluded.file_name, messages.file_name),
+            file_size = COALESCE(excluded.file_size, messages.file_size)
         """,
         (
             chat_id,
@@ -390,16 +404,25 @@ def insert_message(
             fwd_from_author,
             reply_to_message_id,
             topic_id,
+            file_name,
+            file_size,
         ),
     )
 
 
-def update_message_file_path(chat_id: int, message_id: int, file_path: Optional[str]) -> None:
-    """Set a message's media path; pass ``None`` to clear a stale link."""
+def update_message_file_path(
+    chat_id: int, message_id: int, file_path: Optional[str],
+    file_name: Optional[str] = None, file_size: Optional[int] = None,
+) -> None:
+    """Set a message's media path; pass ``None`` to clear a stale link.
+
+    Optionally records the original filename/size (e.g. for documents).
+    """
     conn = get_connection()
     conn.execute(
-        "UPDATE messages SET file_path = ? WHERE chat_id = ? AND message_id = ?",
-        (file_path, chat_id, message_id),
+        "UPDATE messages SET file_path = ?, file_name = COALESCE(?, file_name), "
+        "file_size = COALESCE(?, file_size) WHERE chat_id = ? AND message_id = ?",
+        (file_path, file_name, file_size, chat_id, message_id),
     )
 
 

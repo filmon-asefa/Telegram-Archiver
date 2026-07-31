@@ -45,6 +45,8 @@ export interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  file_name: string | null;
+  file_size: number | null;
   media_duration: number | null;
   media_group_id: number | null;
   media_group_count: number | null;
@@ -126,9 +128,11 @@ const hasChatMeta = [
 ].every((c) => CHAT_COLS.has(c));
 const hasTopicId = MESSAGE_COLS.has("topic_id");
 const hasTopicsTable = tableExists("topics");
+const hasFileName = MESSAGE_COLS.has("file_name") && MESSAGE_COLS.has("file_size");
 
 const MESSAGE_COLUMNS = `m.chat_id, m.message_id, m.sender_id, m.sender_name, m.is_outgoing,
-  m.date_unix, m.text, m.media_type, m.file_path, m.media_duration, m.media_group_id,
+  m.date_unix, m.text, m.media_type, m.file_path, ${hasFileName ? "m.file_name, m.file_size" : "NULL AS file_name, NULL AS file_size"},
+  m.media_duration, m.media_group_id,
   m.is_forward, m.fwd_from_chat_id, m.fwd_from_msg_id, m.fwd_from_date, m.fwd_from_author,
   m.reply_to_message_id, ${hasTopicId ? "m.topic_id" : "NULL AS topic_id"}, m.is_deleted, m.deleted_at_unix, m.downloaded_at_unix,
   (SELECT COUNT(*) FROM messages g

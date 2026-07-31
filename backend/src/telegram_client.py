@@ -191,6 +191,20 @@ async def extract_forward_info(message: Message, client: TelegramClient | None =
     }
 
 
+def document_meta(message: Message) -> Tuple[Optional[str], Optional[int]]:
+    """Return the original (file_name, file_size) for a document, else (None, None)."""
+    from telethon.tl.types import DocumentAttributeFilename
+
+    doc = getattr(message, "document", None)
+    if doc is None:
+        return None, None
+    size = getattr(doc, "size", None)
+    for attr in getattr(doc, "attributes", None) or []:
+        if isinstance(attr, DocumentAttributeFilename):
+            return attr.file_name or None, (int(size) if size else None)
+    return None, (int(size) if size else None)
+
+
 def extract_topic_id(message: Message) -> Optional[int]:
     """Return the forum topic root message id for *message*, or None.
 

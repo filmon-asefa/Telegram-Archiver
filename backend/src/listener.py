@@ -27,6 +27,7 @@ from .telegram_client import (
     chat_metadata,
     classify_media,
     download_with_retry,
+    document_meta,
     extract_forward_info,
     extract_topic_create,
     extract_topic_id,
@@ -64,8 +65,10 @@ async def _download_and_attach(
         chat_folder=chat_folder, sender_name=sender_name,
     )
     if path:
+        file_name, file_size = document_meta(message)
+
         def _write():
-            db.update_message_file_path(chat_id, message.id, path)
+            db.update_message_file_path(chat_id, message.id, path, file_name=file_name, file_size=file_size)
             db.commit()
         _with_db_retry(_write)
         broadcast("media_ready", {"chat_id": chat_id, "message_id": message.id, "file_path": path})
@@ -99,6 +102,7 @@ def register_handlers(client) -> None:
             _topic_id = extract_topic_id(message)
             _topic_create = extract_topic_create(message)
             _is_forum = bool(getattr(chat, "forum", False))
+            _file_name, _file_size = document_meta(message)
 
             def _write():
                 db.upsert_chat(_cid, chat_name, _chat_type, **chat_metadata(chat))
@@ -116,6 +120,8 @@ def register_handlers(client) -> None:
                     media_group_id=_group_id,
                     reply_to_message_id=_reply_to,
                     topic_id=_topic_id,
+                    file_name=_file_name,
+                    file_size=_file_size,
                     **fwd,
                 )
                 if _is_forum and _topic_id is not None:
@@ -136,6 +142,8 @@ def register_handlers(client) -> None:
                 "text": _text,
                 "media_type": media_type,
                 "file_path": None,
+                "file_name": _file_name,
+                "file_size": _file_size,
                 "media_duration": _duration,
                 "media_group_id": _group_id,
                 "is_forward": fwd.get("is_forward", False),
@@ -275,6 +283,7 @@ async def _initial_backfill(client) -> None:
                     fwd = await extract_forward_info(message, client)
                     topic_id = extract_topic_id(message)
                     topic_create = extract_topic_create(message)
+                    file_name, file_size = document_meta(message)
 
                     db.insert_message(
                         chat_id=chat_id,
@@ -290,6 +299,8 @@ async def _initial_backfill(client) -> None:
                         media_group_id=getattr(message, "grouped_id", None),
                         reply_to_message_id=getattr(message, "reply_to_msg_id", None),
                         topic_id=topic_id,
+                        file_name=file_name,
+                        file_size=file_size,
                         **fwd,
                     )
                     if is_forum and topic_id is not None:
@@ -404,6 +415,7 @@ async def _catchup_loop(client) -> None:
                         fwd = await extract_forward_info(message, client)
                         topic_id = extract_topic_id(message)
                         topic_create = extract_topic_create(message)
+                        file_name, file_size = document_meta(message)
                         db.insert_message(
                             chat_id=chat_id,
                             message_id=message.id,
@@ -418,6 +430,8 @@ async def _catchup_loop(client) -> None:
                             media_group_id=getattr(message, "grouped_id", None),
                             reply_to_message_id=getattr(message, "reply_to_msg_id", None),
                             topic_id=topic_id,
+                            file_name=file_name,
+                            file_size=file_size,
                             **fwd,
                         )
                         if is_forum and topic_id is not None:
@@ -461,7 +475,8 @@ async def _catchup_loop(client) -> None:
                                             chat_folder=chat_folder, sender_name=sender_name,
                                         )
                                         if file_path:
-                                            db.update_message_file_path(chat_id, message.id, file_path)
+                                            f_name, f_size = document_meta(message)
+                                            db.update_message_file_path(chat_id, message.id, file_path, file_name=f_name, file_size=f_size)
                                     except FloodWaitError:
                                         break
                                     except Exception:

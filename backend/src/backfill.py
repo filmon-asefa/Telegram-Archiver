@@ -25,6 +25,7 @@ from .telegram_client import (
     chat_metadata,
     classify_media,
     download_with_retry,
+    document_meta,
     extract_forward_info,
     extract_topic_create,
     extract_topic_id,
@@ -75,6 +76,7 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
             fwd = await extract_forward_info(message, client)
             topic_id = extract_topic_id(message)
             topic_create = extract_topic_create(message)
+            file_name, file_size = document_meta(message)
 
             db.insert_message(
                 chat_id=chat_id,
@@ -90,6 +92,8 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
                 media_group_id=getattr(message, "grouped_id", None),
                 reply_to_message_id=getattr(message, "reply_to_msg_id", None),
                 topic_id=topic_id,
+                file_name=file_name,
+                file_size=file_size,
                 **fwd,
             )
             if is_forum and topic_id is not None:
@@ -151,7 +155,8 @@ async def download_missing_media_chat(client, dialog) -> int:
                         chat_folder=chat_folder, sender_name=sender_name,
                     )
                     if file_path:
-                        db.update_message_file_path(chat_id, message.id, file_path)
+                        file_name, file_size = document_meta(message)
+                        db.update_message_file_path(chat_id, message.id, file_path, file_name=file_name, file_size=file_size)
                         count += 1
                 except FloodWaitError as e:
                     await _sleep_flood(e)

@@ -59,6 +59,8 @@ interface Message {
   text: string | null;
   media_type: string | null;
   file_path: string | null;
+  file_name: string | null;
+  file_size: number | null;
   is_forward: number;
   fwd_from_author: string | null;
   reply_to_message_id: number | null;
@@ -611,6 +613,8 @@ export default function ChatView({
           text: data.text ?? null,
           media_type: data.media_type ?? null,
           file_path: data.file_path ?? null,
+          file_name: data.file_name ?? null,
+          file_size: data.file_size ?? null,
           media_duration: data.media_duration ?? null,
           media_group_id: data.media_group_id ?? null,
           media_group_count: data.media_group_count ?? null,
