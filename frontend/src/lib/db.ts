@@ -408,7 +408,8 @@ export function getChatStats(chatId: number, topicId?: TopicFilter) {
 export function getTopics(chatId: number): Topic[] {
   if (!hasTopicsTable || !hasTopicId) return [];
   return queryAll<Topic>(
-    `SELECT t.chat_id, t.topic_id, t.title, t.icon_emoji_id, t.icon_color,
+    `SELECT t.chat_id, t.topic_id, t.title,
+      CASE WHEN t.icon_emoji_id > 9007199254740991 THEN NULL ELSE t.icon_emoji_id END AS icon_emoji_id, t.icon_color,
       t.created_at_unix, t.is_closed, t.is_hidden, t.last_message_id,
       (SELECT COUNT(*) FROM messages m WHERE m.chat_id = t.chat_id AND m.topic_id = t.topic_id) AS message_count,
       (SELECT COUNT(*) FROM messages m WHERE m.chat_id = t.chat_id AND m.topic_id = t.topic_id AND m.file_path IS NOT NULL) AS media_count,

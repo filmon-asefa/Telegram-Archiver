@@ -198,16 +198,15 @@ def extract_topic_id(message: Message) -> Optional[int]:
     Messages in the General topic (or a non-forum chat) return None.
     Topic-creation messages are their own root, so their id is returned.
     """
+    from telethon.tl.types import MessageActionTopicCreate
+
+    action = getattr(message, "action", None)
+    if isinstance(action, MessageActionTopicCreate):
+        return message.id
     reply_to = getattr(message, "reply_to", None)
     if reply_to is None:
         return None
-    if not getattr(reply_to, "forum_topic", False):
-        return None
-    top_id = getattr(reply_to, "reply_to_top_id", None)
-    if top_id:
-        return top_id
-    # topic-creation root message has no reply target; its own id is the topic id
-    return message.id
+    return getattr(reply_to, "reply_to_top_id", None)
 
 
 def extract_topic_create(message: Message) -> Optional[dict]:

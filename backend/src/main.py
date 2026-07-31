@@ -9,6 +9,7 @@
     python -m src.main --listen               # live listener only
     python -m src.main --reorganize-media     # migrate media into human-readable folders
     python -m src.main --resolve-forwards      # resolve forward source names for existing messages
+    python -m src.main --resolve-topics        # fetch real topic names/metadata for forum chats
 """
 from __future__ import annotations
 
@@ -22,16 +23,22 @@ from .forward_fix import run_resolve
 from .listener import run_listener
 from .reconcile_media import reconcile_media
 from .reorganize_media import reorganize_media
+from .resolve_topics import run_resolve_topics
 
 logger = logging.getLogger(__name__)
 
 
 async def run(do_backfill: bool, do_listen: bool, force: bool = False,
               chat_id: int | None = None, skip_media: bool = False,
-              media_only: bool = False, resolve_forwards: bool = False) -> None:
+              media_only: bool = False, resolve_forwards: bool = False,
+              resolve_topics: bool = False) -> None:
     if resolve_forwards:
         logger.info("=== Resolving forward authors ===")
         await run_resolve()
+        return
+    if resolve_topics:
+        logger.info("=== Resolving forum topic metadata ===")
+        await run_resolve_topics(chat_id=chat_id)
         return
     if media_only:
         logger.info("=== Downloading missing media ===")
@@ -68,6 +75,7 @@ def main() -> None:
         help="With --scan-media: report what would be linked without writing",
     )
     parser.add_argument("--resolve-forwards", action="store_true", help="Resolve forward source names for existing messages")
+    parser.add_argument("--resolve-topics", action="store_true", help="Fetch real topic names/metadata for forum chats")
     args = parser.parse_args()
 
     if args.scan_media:
@@ -84,6 +92,11 @@ def main() -> None:
 
     if args.resolve_forwards:
         asyncio.run(run(do_backfill=False, do_listen=False, resolve_forwards=True))
+        db.close()
+        return
+
+    if args.resolve_topics:
+        asyncio.run(run(do_backfill=False, do_listen=False, resolve_topics=True, chat_id=args.backfill_chat))
         db.close()
         return
 

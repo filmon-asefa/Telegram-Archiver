@@ -368,8 +368,8 @@ def insert_message(
              reply_to_message_id, topic_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chat_id, message_id) DO UPDATE SET
-            topic_id = COALESCE(excluded.topic_id, messages.topic_id),
-            reply_to_message_id = COALESCE(excluded.reply_to_message_id, messages.reply_to_message_id)
+            topic_id = excluded.topic_id,
+            reply_to_message_id = excluded.reply_to_message_id
         """,
         (
             chat_id,
