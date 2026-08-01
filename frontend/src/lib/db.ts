@@ -30,16 +30,27 @@ let _db: DatabaseSync | null = null;
 
 function getDb(): DatabaseSync {
   if (!_db) {
-    _db = new DatabaseSync(DB_PATH, { open: true, readOnly: true });
+    // readBigInts: SQLite integers wider than Number.MAX_SAFE_INTEGER (e.g.
+    // Telegram media_group_id) would otherwise throw ERR_OUT_OF_RANGE on read.
+    _db = new DatabaseSync(DB_PATH, { open: true, readOnly: true, readBigInts: true });
   }
   return _db;
+}
+
+// node:sqlite returns every INTEGER as BigInt with readBigInts enabled; convert
+// them back to JS numbers (safe in practice here: values fit exactly).
+function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
+  for (const [key, value] of Object.entries(row)) {
+    if (typeof value === "bigint") row[key] = Number(value);
+  }
+  return row;
 }
 
 export function queryAll<T>(sql: string, params?: (string | number | null)[]): T[] {
   const db = getDb();
   const stmt = db.prepare(sql);
   const rows = params ? stmt.all(...params) : stmt.all();
-  return rows as T[];
+  return rows.map(normalizeRow) as T[];
 }
 
 // Detect the actual DB schema. The backend auto-migrates on connect; until then
@@ -117,7 +128,7 @@ function queryOne<T>(sql: string, params?: (string | number | null)[]): T | unde
   const db = getDb();
   const stmt = db.prepare(sql);
   const row = params ? stmt.get(...params) : stmt.get();
-  return row as T | undefined;
+  return (row ? normalizeRow(row) : row) as T | undefined;
 }
 
 function topicWhere(topicId?: TopicFilter, alias = "m."): string {
