@@ -315,5 +315,6 @@ async def build_message_row(
         "topic_id": extract_topic_id(message),
         "file_name": file_name,
         "file_size": file_size,
+        "pinned": bool(getattr(message, "pinned", False)),
         **await extract_forward_info(message, client),
     }

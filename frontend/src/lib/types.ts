@@ -85,3 +85,66 @@ export interface DeletedMessage {
 }
 
 export type TopicFilter = number | "general";
+
+export interface ChatStats {
+  total_messages: number;
+  total_media: number;
+  photos: number;
+  videos: number;
+  voice: number;
+  documents: number;
+  audio: number;
+  stickers: number;
+  animations: number;
+  locations: number;
+  contacts: number;
+  polls: number;
+  links: number;
+  replies: number;
+  forwarded: number;
+  pinned: number;
+  albums: number;
+  deleted_messages: number;
+  edited_messages: number;
+  first_message_date: number | null;
+  last_message_date: number | null;
+  top_senders: Sender[];
+  total_edits: number;
+  total_deletions: number;
+}
+
+export type ArchiveFilter =
+  | "messages"
+  | "photos"
+  | "videos"
+  | "voice"
+  | "audio"
+  | "documents"
+  | "animations"
+  | "stickers"
+  | "links"
+  | "locations"
+  | "contacts"
+  | "polls"
+  | "replies"
+  | "forwarded"
+  | "pinned"
+  | "edited"
+  | "deleted"
+  | "albums";
+
+export type ArchiveSort =
+  | "newest"
+  | "oldest"
+  | "largest"
+  | "smallest"
+  | "name"
+  | "sender"
+  | "duration";
+
+export interface ExploreResponse {
+  items: Message[];
+  total: number;
+  offset: number;
+  limit: number;
+}

@@ -3,9 +3,30 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import {
+  BarChart3,
+  Contact,
+  CornerUpRight,
+  FileText,
+  Film,
+  Image as ImageIcon,
+  Layers,
+  Link2,
+  MapPin,
+  MessageSquare,
+  Mic,
+  Music,
+  Pencil,
+  Pin,
+  Reply,
+  Smile,
+  Trash2,
+  Video,
+} from "lucide-react";
 import MessageBubble from "@/components/MessageBubble";
 import TopicPanel, { type TopicFilter, type TopicItem } from "@/components/TopicPanel";
-import type { Message, DeletedMessage } from "@/lib/types";
+import ArchiveExplorer, { type ArchiveFilter } from "@/components/ArchiveExplorer";
+import type { Message, DeletedMessage, ChatStats } from "@/lib/types";
 import {
   formatDateSeparator,
   getAvatarColor,
@@ -32,21 +53,7 @@ interface ChatInfo {
   is_verified: number;
   forum: number;
   gigagroup: number;
-  stats: {
-    total_messages: number;
-    total_media: number;
-    photos: number;
-    videos: number;
-    voice: number;
-    documents: number;
-    audio: number;
-    stickers: number;
-    first_message_date: number | null;
-    last_message_date: number | null;
-    top_senders: { sender_id: number; sender_name: string; message_count: number }[];
-    total_edits: number;
-    total_deletions: number;
-  };
+  stats: ChatStats;
   topics: TopicItem[];
 }
 
@@ -77,6 +84,12 @@ export default function ChatView({
   const [deletedMsgs, setDeletedMsgs] = useState<DeletedMessage[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter | null>(null);
+  const [archiveSenders, setArchiveSenders] = useState<number[]>([]);
+  const archiveFilterRef = useRef<ArchiveFilter | null>(null);
+  useEffect(() => {
+    archiveFilterRef.current = archiveFilter;
+  }, [archiveFilter]);
   const [topicsOpen, setTopicsOpen] = useState(false);
   const [replyTargets, setReplyTargets] = useState<Record<number, Message | null>>({});
   const fetchingRepliesRef = useRef<Set<number>>(new Set());
@@ -152,6 +165,8 @@ export default function ChatView({
     setReplyTargets({});
     setInfoOpen(false);
     setTopicsOpen(false);
+    setArchiveFilter(null);
+    setArchiveSenders([]);
     fetchingRepliesRef.current.clear();
     setEditCounts({});
     pendingJumpRef.current = null;
@@ -231,6 +246,17 @@ export default function ChatView({
       })
       .catch(() => setLoading(false));
   }, [chatId, fetchMessages]);
+
+  const openArchiveFilter = useCallback((filter: ArchiveFilter) => {
+    setArchiveFilter(filter);
+  }, []);
+
+  const toggleArchiveSender = useCallback((senderId: number) => {
+    setArchiveSenders((prev) =>
+      prev.includes(senderId) ? prev.filter((x) => x !== senderId) : [...prev, senderId]
+    );
+    setArchiveFilter((prev) => prev ?? "messages");
+  }, []);
 
   const topicRows = useMemo((): TopicItem[] => {
     if (!chat) return [];
@@ -490,6 +516,19 @@ export default function ChatView({
     [selectTopic, jumpToMessage]
   );
 
+  // Jump to a message from the archive explorer: close the explorer, drop any
+  // active filters so the conversation shows the message, then highlight it.
+  const handleArchiveJump = useCallback(
+    (messageId: number) => {
+      setArchiveFilter(null);
+      setArchiveSenders([]);
+      setMediaFilter("");
+      mediaFilterRef.current = "";
+      setTimeout(() => jumpToMessage(messageId), 0);
+    },
+    [jumpToMessage]
+  );
+
   // Resolve reply targets lazily: from the loaded list when possible, otherwise
   // fetch a window around the target so the reply header can render and jump.
   useEffect(() => {
@@ -729,7 +768,7 @@ export default function ChatView({
 
   return (
     <div className="flex flex-1 min-w-0 min-h-0">
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+      <div className="relative flex-1 min-w-0 min-h-0 flex flex-col">
         <div
           className="flex items-center gap-2 px-2 py-[6px] shrink-0"
           style={{ background: "var(--bg-header)", borderBottom: "1px solid var(--border)" }}
@@ -893,6 +932,20 @@ export default function ChatView({
             </div>
           )}
         </div>
+
+        {archiveFilter && chatId != null && (
+          <ArchiveExplorer
+            chatId={chatId}
+            chatName={name}
+            filter={archiveFilter}
+            topic={selectedTopic}
+            senders={archiveSenders}
+            stats={chat.stats}
+            onSendersChange={setArchiveSenders}
+            onClose={() => setArchiveFilter(null)}
+            onJump={handleArchiveJump}
+          />
+        )}
       </div>
 
       {isForum && chatId != null && (
@@ -1000,31 +1053,62 @@ export default function ChatView({
         </div>
 
         <div className="px-4 pb-4">
-          <h3 className="text-xs font-semibold uppercase mb-3" style={{ color: "var(--text-secondary)" }}>
-            Statistics
+          <h3 className="text-xs font-semibold uppercase mb-2 flex items-center justify-between" style={{ color: "var(--text-secondary)" }}>
+            <span>Statistics</span>
+            <span className="text-[10px] font-normal">click to browse</span>
           </h3>
           <div className="grid grid-cols-2 gap-2">
             {[
-              { label: "Messages", value: chat.stats.total_messages },
-              { label: "Photos", value: chat.stats.photos },
-              { label: "Videos", value: chat.stats.videos },
-              { label: "Voice", value: chat.stats.voice },
-              { label: "Documents", value: chat.stats.documents },
-              { label: "Audio", value: chat.stats.audio },
-            ].map((item) => (
-              <div
-                key={item.label}
-                className="rounded-lg px-3 py-2"
-                style={{ background: "var(--bg-input)" }}
-              >
-                <div className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-                  {item.value?.toLocaleString() || 0}
-                </div>
-                <div className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                  {item.label}
-                </div>
-              </div>
-            ))}
+              { filter: "messages" as ArchiveFilter, label: "Messages", key: "total_messages" as const, icon: MessageSquare, color: "var(--text-accent)" },
+              { filter: "photos" as ArchiveFilter, label: "Photos", key: "photos" as const, icon: ImageIcon, color: "#7bc862" },
+              { filter: "videos" as ArchiveFilter, label: "Videos", key: "videos" as const, icon: Video, color: "#65aadd" },
+              { filter: "voice" as ArchiveFilter, label: "Voice", key: "voice" as const, icon: Mic, color: "#e6ca69" },
+              { filter: "audio" as ArchiveFilter, label: "Audio", key: "audio" as const, icon: Music, color: "#ee7aae" },
+              { filter: "documents" as ArchiveFilter, label: "Documents", key: "documents" as const, icon: FileText, color: "#a695e7" },
+              { filter: "animations" as ArchiveFilter, label: "GIFs", key: "animations" as const, icon: Film, color: "#6ec9cb" },
+              { filter: "stickers" as ArchiveFilter, label: "Stickers", key: "stickers" as const, icon: Smile, color: "#faa774" },
+              { filter: "links" as ArchiveFilter, label: "Links", key: "links" as const, icon: Link2, color: "#5eb5f7" },
+              { filter: "locations" as ArchiveFilter, label: "Locations", key: "locations" as const, icon: MapPin, color: "#e6804e" },
+              { filter: "contacts" as ArchiveFilter, label: "Contacts", key: "contacts" as const, icon: Contact, color: "#955cdb" },
+              { filter: "polls" as ArchiveFilter, label: "Polls", key: "polls" as const, icon: BarChart3, color: "#d67722" },
+              { filter: "replies" as ArchiveFilter, label: "Replies", key: "replies" as const, icon: Reply, color: "#40a7e3" },
+              { filter: "forwarded" as ArchiveFilter, label: "Forwarded", key: "forwarded" as const, icon: CornerUpRight, color: "#4ecca3" },
+              { filter: "pinned" as ArchiveFilter, label: "Pinned", key: "pinned" as const, icon: Pin, color: "#f5b042" },
+              { filter: "edited" as ArchiveFilter, label: "Edited", key: "edited_messages" as const, icon: Pencil, color: "#6bc19b" },
+              { filter: "deleted" as ArchiveFilter, label: "Deleted", key: "deleted_messages" as const, icon: Trash2, color: "#ff5c5c" },
+              { filter: "albums" as ArchiveFilter, label: "Media Albums", key: "albums" as const, icon: Layers, color: "#cd3d64" },
+            ].map((item) => {
+              const Icon = item.icon;
+              const active = archiveFilter === item.filter;
+              const value = chat.stats[item.key];
+              return (
+                <button
+                  key={item.filter}
+                  onClick={() => openArchiveFilter(item.filter)}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors cursor-pointer"
+                  style={{ background: active ? "var(--bg-chat-active)" : "var(--bg-input)" }}
+                  title={`Browse ${item.label.toLowerCase()}`}
+                  onMouseEnter={(e) => {
+                    if (!active) e.currentTarget.style.background = "var(--bg-chat-hover)";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) e.currentTarget.style.background = "var(--bg-input)";
+                  }}
+                >
+                  <span className="shrink-0">
+                    <Icon size={16} style={{ color: item.color }} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-base font-semibold leading-tight" style={{ color: "var(--text-primary)" }}>
+                      {value?.toLocaleString() || 0}
+                    </span>
+                    <span className="block text-[11px] leading-tight truncate" style={{ color: "var(--text-secondary)" }}>
+                      {item.label}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1032,26 +1116,39 @@ export default function ChatView({
           <div className="px-4 pb-4">
             <h3 className="text-xs font-semibold uppercase mb-2" style={{ color: "var(--text-secondary)" }}>
               {isChannel ? "Posters" : isGroup ? "Members" : "Senders"}
+              <span className="text-[10px] font-normal ml-1">· click to filter</span>
             </h3>
-            {chat.stats.top_senders.slice(0, 8).map((s) => (
-              <div
-                key={s.sender_id}
-                className="flex items-center gap-2 text-[13px] py-[3px]"
-              >
-                <div
-                  className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0"
-                  style={{ background: getAvatarColor(s.sender_name || "Unknown") }}
+            {chat.stats.top_senders.slice(0, 10).map((s) => {
+              const active = archiveSenders.includes(s.sender_id);
+              return (
+                <button
+                  key={s.sender_id}
+                  onClick={() => toggleArchiveSender(s.sender_id)}
+                  className="w-full flex items-center gap-2 text-[13px] py-[3px] rounded-lg px-1 cursor-pointer transition-colors"
+                  style={{ background: active ? "var(--bg-chat-active)" : "transparent" }}
+                  title={active ? "Remove sender filter" : "Filter by this sender"}
+                  onMouseEnter={(e) => {
+                    if (!active) e.currentTarget.style.background = "var(--bg-chat-hover)";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) e.currentTarget.style.background = "transparent";
+                  }}
                 >
-                  {getInitials(s.sender_name || "Unknown")}
-                </div>
-                <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
-                  {s.sender_name}
-                </span>
-                <span className="shrink-0" style={{ color: "var(--text-secondary)" }}>
-                  {s.message_count}
-                </span>
-              </div>
-            ))}
+                  <div
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0"
+                    style={{ background: getAvatarColor(s.sender_name || "Unknown") }}
+                  >
+                    {getInitials(s.sender_name || "Unknown")}
+                  </div>
+                  <span className="truncate flex-1 text-left" style={{ color: "var(--text-primary)" }}>
+                    {s.sender_name}
+                  </span>
+                  <span className="shrink-0" style={{ color: active ? "var(--text-accent)" : "var(--text-secondary)" }}>
+                    {s.message_count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
 

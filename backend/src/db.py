@@ -232,6 +232,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
 
+    # messages.pinned for the archive explorer's Pinned filter
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        logger.info("Migrated: added messages.pinned")
+    except sqlite3.OperationalError:
+        pass
+
     # normalize legacy chat_type values from older Telethon entity class names
     conn.execute(
         "UPDATE chats SET chat_type = 'group' "
@@ -369,6 +376,7 @@ def insert_message(
     topic_id: Optional[int] = None,
     file_name: Optional[str] = None,
     file_size: Optional[int] = None,
+    pinned: bool = False,
 ) -> None:
     conn = get_connection()
     conn.execute(
@@ -377,13 +385,14 @@ def insert_message(
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
              date_unix, text, media_type, file_path, media_duration, media_group_id,
              is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author,
-             reply_to_message_id, topic_id, file_name, file_size)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             reply_to_message_id, topic_id, file_name, file_size, pinned)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chat_id, message_id) DO UPDATE SET
             topic_id = excluded.topic_id,
             reply_to_message_id = excluded.reply_to_message_id,
             file_name = COALESCE(excluded.file_name, messages.file_name),
-            file_size = COALESCE(excluded.file_size, messages.file_size)
+            file_size = COALESCE(excluded.file_size, messages.file_size),
+            pinned = excluded.pinned
         """,
         (
             chat_id,
@@ -406,6 +415,7 @@ def insert_message(
             topic_id,
             file_name,
             file_size,
+            int(bool(pinned)),
         ),
     )
 
