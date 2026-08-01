@@ -519,22 +519,17 @@ def record_deletion(chat_id: int, message_id: int) -> None:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (chat_id, message_id, now, row[2], row[0], row[1], row[3]),
         )
-        conn.execute(
-            "UPDATE messages SET is_deleted = 1, deleted_at_unix = ? "
-            "WHERE chat_id = ? AND message_id = ?",
-            (now, chat_id, message_id),
-        )
     else:
         conn.execute(
             "INSERT INTO message_deleted (chat_id, message_id, deleted_at_unix) "
             "VALUES (?, ?, ?)",
             (chat_id, message_id, now),
         )
-        conn.execute(
-            "UPDATE messages SET is_deleted = 1, deleted_at_unix = ? "
-            "WHERE chat_id = ? AND message_id = ?",
-            (now, chat_id, message_id),
-        )
+    conn.execute(
+        "UPDATE messages SET is_deleted = 1, deleted_at_unix = ? "
+        "WHERE chat_id = ? AND message_id = ?",
+        (now, chat_id, message_id),
+    )
 
 
 def update_message_text(chat_id: int, message_id: int, text: str | None, sender_name: str | None = None) -> None:
@@ -550,15 +545,6 @@ def update_message_text(chat_id: int, message_id: int, text: str | None, sender_
             "UPDATE messages SET text = ? WHERE chat_id = ? AND message_id = ?",
             (text, chat_id, message_id),
         )
-
-
-def delete_message(chat_id: int, message_id: int) -> None:
-    """Remove a message from the messages table after it's been deleted."""
-    conn = get_connection()
-    conn.execute(
-        "DELETE FROM messages WHERE chat_id = ? AND message_id = ?",
-        (chat_id, message_id),
-    )
 
 
 def get_edits(chat_id: int, message_id: int) -> list[dict]:

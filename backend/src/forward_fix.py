@@ -5,7 +5,7 @@ import asyncio
 import logging
 
 from . import db
-from .telegram_client import build_client, start_client
+from .telegram_client import build_client, entity_display_name, start_client
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,7 @@ async def run_resolve() -> None:
     for cid in chat_ids:
         try:
             entity = await client.get_entity(cid)
-            first = getattr(entity, "first_name", None) or ""
-            last = getattr(entity, "last_name", None) or ""
-            name = f"{first} {last}".strip() or getattr(entity, "title", None) or getattr(entity, "username", None) or "Unknown"
+            name = entity_display_name(entity) or "Unknown"
             chat_id_to_name[cid] = name
             logger.info("  %s → %s", cid, name)
         except Exception:

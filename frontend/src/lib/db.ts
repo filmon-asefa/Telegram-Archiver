@@ -1,6 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "fs";
 import path from "path";
+import type {
+  Chat,
+  Message,
+  Topic,
+  Sender,
+  MessageEdit,
+  DeletedMessage,
+  TopicFilter,
+} from "./types";
+
+export type {
+  Chat,
+  Message,
+  Topic,
+  Sender,
+  MessageEdit,
+  DeletedMessage,
+  TopicFilter,
+} from "./types";
 
 const DB_PATH = path.resolve(
   process.env.ARCHIVER_DB_PATH ||
@@ -14,71 +33,6 @@ function getDb(): DatabaseSync {
     _db = new DatabaseSync(DB_PATH, { open: true, readOnly: true });
   }
   return _db;
-}
-
-export interface Chat {
-  chat_id: number;
-  chat_name: string;
-  chat_type: string;
-  last_synced_message_id: number;
-  username: string | null;
-  description: string | null;
-  participant_count: number | null;
-  linked_chat_id: number | null;
-  megagroup: number;
-  broadcast: number;
-  is_verified: number;
-  forum: number;
-  gigagroup: number;
-  message_count: number;
-  last_message_text: string | null;
-  last_message_date: number | null;
-}
-
-export interface Message {
-  chat_id: number;
-  message_id: number;
-  sender_id: number | null;
-  sender_name: string | null;
-  is_outgoing: number;
-  date_unix: number;
-  text: string | null;
-  media_type: string | null;
-  file_path: string | null;
-  file_name: string | null;
-  file_size: number | null;
-  media_duration: number | null;
-  media_group_id: number | null;
-  media_group_count: number | null;
-  is_forward: number;
-  fwd_from_author: string | null;
-  reply_to_message_id: number | null;
-  topic_id: number | null;
-  is_deleted: number;
-  deleted_at_unix: number | null;
-}
-
-export interface Topic {
-  chat_id: number;
-  topic_id: number;
-  title: string | null;
-  icon_emoji_id: number | null;
-  icon_color: number | null;
-  created_at_unix: number | null;
-  is_closed: number;
-  is_hidden: number;
-  last_message_id: number | null;
-  message_count: number;
-  media_count: number;
-  deleted_count: number;
-  last_message_date: number | null;
-  last_message_text: string | null;
-}
-
-export interface Sender {
-  sender_id: number;
-  sender_name: string;
-  message_count: number;
 }
 
 export function queryAll<T>(sql: string, params?: (string | number | null)[]): T[] {
@@ -165,8 +119,6 @@ function queryOne<T>(sql: string, params?: (string | number | null)[]): T | unde
   return row as T | undefined;
 }
 
-type TopicFilter = number | "general";
-
 function topicWhere(topicId?: TopicFilter, alias = "m."): string {
   if (!hasTopicId || topicId === undefined) return "";
   if (topicId === "general") return ` AND ${alias}topic_id IS NULL`;
@@ -185,16 +137,10 @@ const CHAT_COLUMNS = `c.chat_id, c.chat_name, c.chat_type, c.last_synced_message
   (SELECT ${DELETED_PREVIEW} FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
   (SELECT date_unix FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_date`;
 
-const CHAT_COLUMNS_SEARCH = `c.chat_id, c.chat_name, c.chat_type, c.last_synced_message_id,
-  ${CHAT_META_COLUMNS},
-  (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS message_count,
-  (SELECT ${DELETED_PREVIEW} FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_text,
-  (SELECT date_unix FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.date_unix DESC LIMIT 1) AS last_message_date`;
-
 export function getChats(search?: string): Chat[] {
   if (search) {
     return queryAll<Chat>(
-      `SELECT ${CHAT_COLUMNS_SEARCH}
+      `SELECT ${CHAT_COLUMNS}
        FROM chats c WHERE c.chat_name LIKE ? ORDER BY last_message_date DESC`,
       [`%${search}%`]
     );
@@ -441,21 +387,6 @@ export function getGeneralTopic(chatId: number): Topic | undefined {
 
 export function getGeneralTopicStats(chatId: number) {
   return getChatStats(chatId, "general");
-}
-
-export interface MessageEdit {
-  old_text: string | null;
-  new_text: string | null;
-  edited_at_unix: number;
-}
-
-export interface DeletedMessage {
-  message_id: number;
-  deleted_at_unix: number;
-  old_text: string | null;
-  old_sender_name: string | null;
-  old_date_unix: number | null;
-  old_media_type: string | null;
 }
 
 export function getMessageEdits(chatId: number, messageId: number): MessageEdit[] {

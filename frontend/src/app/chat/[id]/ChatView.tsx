@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import MessageBubble from "@/components/MessageBubble";
 import TopicPanel, { type TopicFilter, type TopicItem } from "@/components/TopicPanel";
+import type { Message, DeletedMessage } from "@/lib/types";
 import {
   formatDateSeparator,
   getAvatarColor,
@@ -49,38 +50,6 @@ interface ChatInfo {
   topics: TopicItem[];
 }
 
-interface Message {
-  chat_id: number;
-  message_id: number;
-  sender_id: number | null;
-  sender_name: string | null;
-  is_outgoing: number;
-  date_unix: number;
-  text: string | null;
-  media_type: string | null;
-  file_path: string | null;
-  file_name: string | null;
-  file_size: number | null;
-  is_forward: number;
-  fwd_from_author: string | null;
-  reply_to_message_id: number | null;
-  topic_id: number | null;
-  media_duration: number | null;
-  media_group_id: number | null;
-  media_group_count: number | null;
-  is_deleted: number;
-  deleted_at_unix: number | null;
-}
-
-interface DeletedMsg {
-  message_id: number;
-  deleted_at_unix: number;
-  old_text: string | null;
-  old_sender_name: string | null;
-  old_date_unix: number | null;
-  old_media_type: string | null;
-}
-
 function getDayKey(unix: number): string {
   const d = new Date(unix * 1000);
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -105,7 +74,7 @@ export default function ChatView({
   const initialLoadDoneRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
   const [editCounts, setEditCounts] = useState<Record<number, number>>({});
-  const [deletedMsgs, setDeletedMsgs] = useState<DeletedMsg[]>([]);
+  const [deletedMsgs, setDeletedMsgs] = useState<DeletedMessage[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [topicsOpen, setTopicsOpen] = useState(false);
@@ -169,7 +138,7 @@ export default function ChatView({
     const p = new URLSearchParams({ limit: "50" });
     if (topicId !== undefined) p.set("topic_id", topicId === "general" ? "general" : String(topicId));
     const res = await fetch(`/api/chats/${id}/deleted?${p}`);
-    const data: DeletedMsg[] = await res.json();
+    const data: DeletedMessage[] = await res.json();
     return data;
   }, []);
 
@@ -397,7 +366,7 @@ export default function ChatView({
     if (!chatId) return;
     fetch(`/api/chats/${chatId}/deleted`)
       .then((r) => r.json())
-      .then((data: DeletedMsg[]) => setDeletedMsgs(data))
+      .then((data: DeletedMessage[]) => setDeletedMsgs(data))
       .catch(() => {});
   }, [chatId]);
 
@@ -619,6 +588,9 @@ export default function ChatView({
           media_group_id: data.media_group_id ?? null,
           media_group_count: data.media_group_count ?? null,
           is_forward: data.is_forward ? 1 : 0,
+          fwd_from_chat_id: data.fwd_from_chat_id ?? null,
+          fwd_from_msg_id: data.fwd_from_msg_id ?? null,
+          fwd_from_date: data.fwd_from_date ?? null,
           fwd_from_author: data.fwd_from_author ?? null,
           reply_to_message_id: data.reply_to_message_id ?? null,
           topic_id: msgTopic,

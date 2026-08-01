@@ -28,18 +28,14 @@ from .resolve_topics import run_resolve_topics
 logger = logging.getLogger(__name__)
 
 
-async def run(do_backfill: bool, do_listen: bool, force: bool = False,
-              chat_id: int | None = None, skip_media: bool = False,
-              media_only: bool = False, resolve_forwards: bool = False,
-              resolve_topics: bool = False) -> None:
-    if resolve_forwards:
-        logger.info("=== Resolving forward authors ===")
-        await run_resolve()
-        return
-    if resolve_topics:
-        logger.info("=== Resolving forum topic metadata ===")
-        await run_resolve_topics(chat_id=chat_id)
-        return
+async def run(
+    do_backfill: bool,
+    do_listen: bool,
+    force: bool = False,
+    chat_id: int | None = None,
+    skip_media: bool = False,
+    media_only: bool = False,
+) -> None:
     if media_only:
         logger.info("=== Downloading missing media ===")
         await run_media_download(chat_id=chat_id)
@@ -91,24 +87,21 @@ def main() -> None:
         return
 
     if args.resolve_forwards:
-        asyncio.run(run(do_backfill=False, do_listen=False, resolve_forwards=True))
+        asyncio.run(run_resolve())
         db.close()
         return
 
     if args.resolve_topics:
-        asyncio.run(run(do_backfill=False, do_listen=False, resolve_topics=True, chat_id=args.backfill_chat))
+        asyncio.run(run_resolve_topics(chat_id=args.backfill_chat))
         db.close()
         return
 
-    do_backfill = args.backfill or args.backfill_all or args.backfill_chat is not None or args.media_only or (not args.listen)
-    do_listen = args.listen or (not args.backfill and not args.backfill_all and args.backfill_chat is None and not args.media_only)
-
-    if args.listen and not args.backfill and not args.backfill_all and args.backfill_chat is None and not args.media_only:
-        do_backfill = False
+    has_backfill_task = args.backfill or args.backfill_all or args.backfill_chat is not None or args.media_only
 
     try:
         asyncio.run(run(
-            do_backfill, do_listen,
+            do_backfill=not args.listen or has_backfill_task,
+            do_listen=args.listen or not has_backfill_task,
             force=args.backfill_all,
             chat_id=args.backfill_chat,
             skip_media=args.no_media,

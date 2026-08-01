@@ -15,6 +15,13 @@ from .utils.media_storage import get_storage_path
 
 logger = logging.getLogger(__name__)
 
+# Media kinds that are saved as files on disk (the rest — contacts, locations,
+# polls — are display-only and never downloaded).
+DOWNLOADABLE_MEDIA_TYPES = frozenset({
+    "photos", "videos", "voice", "documents", "audio",
+    "stickers", "animations", "other",
+})
+
 
 def get_media_duration(message: Message) -> Optional[int]:
     """Return the media duration in seconds for voice/audio/video media, else None."""
@@ -113,10 +120,29 @@ async def download_with_retry(
     return None
 
 
+def entity_display_name(entity) -> str:
+    """Return a display name for any Telethon entity (user or chat).
+
+    Priority: first+last name → chat title → username → phone.
+    """
+    if entity is None:
+        return ""
+    first = getattr(entity, "first_name", None) or ""
+    last = getattr(entity, "last_name", None) or ""
+    name = f"{first} {last}".strip()
+    if not name:
+        name = getattr(entity, "title", None) or ""
+    if not name:
+        name = getattr(entity, "username", None) or ""
+    if not name:
+        name = getattr(entity, "phone", None) or ""
+    return name
+
+
 async def sender_display_name(message: Message, is_outgoing: bool = False) -> Tuple[Optional[int], str]:
     """Return (sender_id, display_name) for a message.
 
-    Priority: first+last name → username → phone → 'Me' (outgoing) → 'Unknown User'.
+    Priority: first+last name → title → username → phone → 'Me' (outgoing) → 'Unknown User'.
     """
     sender = await message.get_sender()
     if sender is None:
@@ -124,28 +150,11 @@ async def sender_display_name(message: Message, is_outgoing: bool = False) -> Tu
             return message.sender_id, "Me"
         return message.sender_id, "Unknown User"
 
-    # Build name from first + last
-    first = getattr(sender, "first_name", None) or ""
-    last = getattr(sender, "last_name", None) or ""
-    name = f"{first} {last}".strip()
-
-    # Fallback to username
-    if not name:
-        name = getattr(sender, "username", None) or ""
-
-    # Fallback to phone
-    if not name:
-        phone = getattr(sender, "phone", None) or ""
-        name = phone
-
-    # Fallback for outgoing
+    name = entity_display_name(sender)
     if not name and is_outgoing:
         name = "Me"
-
-    # Final fallback
     if not name:
         name = "Unknown User"
-
     return message.sender_id, name
 
 
@@ -274,4 +283,37 @@ def chat_metadata(entity) -> dict:
         "is_verified": bool(getattr(entity, "verified", False)),
         "forum": bool(getattr(entity, "forum", False)),
         "gigagroup": bool(getattr(entity, "gigagroup", False)),
+    }
+
+
+async def build_message_row(
+    chat_id: int,
+    message: Message,
+    client: TelegramClient | None = None,
+    file_path: str | None = None,
+) -> dict:
+    """Compute every column for ``db.insert_message`` from a Telethon Message.
+
+    This is the single source of truth for the message→DB-row mapping used by
+    the backfill and listener paths.
+    """
+    sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
+    file_name, file_size = document_meta(message)
+    return {
+        "chat_id": chat_id,
+        "message_id": message.id,
+        "sender_id": sender_id,
+        "sender_name": sender_name,
+        "is_outgoing": bool(message.out),
+        "date_unix": int(message.date.timestamp()),
+        "text": message.text,
+        "media_type": classify_media(message),
+        "file_path": file_path,
+        "media_duration": get_media_duration(message),
+        "media_group_id": getattr(message, "grouped_id", None),
+        "reply_to_message_id": getattr(message, "reply_to_msg_id", None),
+        "topic_id": extract_topic_id(message),
+        "file_name": file_name,
+        "file_size": file_size,
+        **await extract_forward_info(message, client),
     }

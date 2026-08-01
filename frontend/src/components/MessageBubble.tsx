@@ -2,35 +2,8 @@
 
 import { memo, useState } from "react";
 import { formatTime, getMediaIcon, getSenderColor, encodeMediaPath } from "@/lib/utils";
+import type { Message, MessageEdit } from "@/lib/types";
 import VoiceMessage from "@/components/VoiceMessage";
-
-interface Message {
-  chat_id: number;
-  message_id: number;
-  sender_id: number | null;
-  sender_name: string | null;
-  is_outgoing: number;
-  date_unix: number;
-  text: string | null;
-  media_type: string | null;
-  file_path: string | null;
-  file_name: string | null;
-  file_size: number | null;
-  media_duration: number | null;
-  media_group_id: number | null;
-  media_group_count: number | null;
-  is_forward: number;
-  fwd_from_author: string | null;
-  reply_to_message_id: number | null;
-  is_deleted: number;
-  deleted_at_unix: number | null;
-}
-
-interface Edit {
-  old_text: string | null;
-  new_text: string | null;
-  edited_at_unix: number;
-}
 
 const isPdf = (path: string) => path.toLowerCase().endsWith(".pdf");
 const isVideoExt = (path: string) => /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(path);
@@ -301,7 +274,7 @@ export default function MessageBubble({
   albumDeletedLeader?: boolean;
 }) {
   const [showEdits, setShowEdits] = useState(false);
-  const [edits, setEdits] = useState<Edit[] | null>(null);
+  const [edits, setEdits] = useState<MessageEdit[] | null>(null);
   const [loadingEdits, setLoadingEdits] = useState(false);
 
   const isChannel = chatType === "channel";

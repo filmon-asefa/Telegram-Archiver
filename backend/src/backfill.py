@@ -20,17 +20,14 @@ from telethon.errors import FloodWaitError
 from . import db
 from .config import settings
 from .telegram_client import (
+    DOWNLOADABLE_MEDIA_TYPES,
     build_client,
+    build_message_row,
     canonical_chat_type,
     chat_metadata,
-    classify_media,
-    download_with_retry,
     document_meta,
-    extract_forward_info,
+    download_with_retry,
     extract_topic_create,
-    extract_topic_id,
-    get_media_duration,
-    sender_display_name,
     start_client,
 )
 from .utils.media_storage import get_chat_folder
@@ -62,42 +59,19 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
     flood_retries = 0
     async for message in client.iter_messages(dialog, min_id=min_id, reverse=True):
         try:
-            media_type = classify_media(message)
-            file_path = None
+            row = await build_message_row(chat_id, message, client)
 
-            sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
-
-            if media_type is not None and settings.download_media and not skip_media:
+            if row["media_type"] is not None and settings.download_media and not skip_media:
                 file_path = await download_with_retry(
                     message, settings.media_dir, chat_id,
-                    chat_folder=chat_folder, sender_name=sender_name,
+                    chat_folder=chat_folder, sender_name=row["sender_name"],
                 )
+                if file_path:
+                    row["file_path"] = file_path
 
-            fwd = await extract_forward_info(message, client)
-            topic_id = extract_topic_id(message)
-            topic_create = extract_topic_create(message)
-            file_name, file_size = document_meta(message)
-
-            db.insert_message(
-                chat_id=chat_id,
-                message_id=message.id,
-                sender_id=sender_id,
-                sender_name=sender_name,
-                is_outgoing=bool(message.out),
-                date_unix=int(message.date.timestamp()),
-                text=message.text,
-                media_type=media_type,
-                file_path=file_path,
-                media_duration=get_media_duration(message),
-                media_group_id=getattr(message, "grouped_id", None),
-                reply_to_message_id=getattr(message, "reply_to_msg_id", None),
-                topic_id=topic_id,
-                file_name=file_name,
-                file_size=file_size,
-                **fwd,
-            )
-            if is_forum and topic_id is not None:
-                db.upsert_topic(chat_id, topic_id, last_message_id=message.id, **(topic_create or {}))
+            db.insert_message(**row)
+            if is_forum and row["topic_id"] is not None:
+                db.upsert_topic(chat_id, row["topic_id"], last_message_id=message.id, **(extract_topic_create(message) or {}))
             highest_seen = max(highest_seen, message.id)
             count += 1
             flood_retries = 0
@@ -126,9 +100,8 @@ async def download_missing_media_chat(client, dialog) -> int:
     """Download media by iterating chat messages — stable unlike per-message get_messages."""
     chat_id = dialog.id
     chat_folder = get_chat_folder(chat_id, dialog.name)
-    DOWNLOADABLE = {"photos", "videos", "voice", "documents", "audio", "stickers", "animations", "other"}
     rows = db.get_messages_missing_media(chat_id)
-    rows = [r for r in rows if r[1] in DOWNLOADABLE]
+    rows = [r for r in rows if r[1] in DOWNLOADABLE_MEDIA_TYPES]
     if not rows:
         return 0
 
