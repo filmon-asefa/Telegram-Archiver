@@ -14,15 +14,21 @@ import sqlite3
 import time
 
 from telethon import events
-from telethon.errors import FloodWaitError
-from telethon.tl import types
 
 from . import db
+from .backfill import backfill_chat, download_missing_media_chat
 from .config import settings
+from .reconcile_media import reconcile_media
+from .sse_server import broadcast, start_sse_server
 from .telegram_client import (
     build_client,
+    build_message_row,
+    canonical_chat_type,
+    chat_metadata,
     classify_media,
     download_with_retry,
+    document_meta,
+    extract_topic_create,
     sender_display_name,
     start_client,
 )
@@ -56,10 +62,13 @@ async def _download_and_attach(
         chat_folder=chat_folder, sender_name=sender_name,
     )
     if path:
+        file_name, file_size = document_meta(message)
+
         def _write():
-            db.update_message_file_path(chat_id, message.id, path)
+            db.update_message_file_path(chat_id, message.id, path, file_name=file_name, file_size=file_size)
             db.commit()
         _with_db_retry(_write)
+        broadcast("media_ready", {"chat_id": chat_id, "message_id": message.id, "file_path": path})
 
 
 def register_handlers(client) -> None:
@@ -72,39 +81,45 @@ def register_handlers(client) -> None:
             chat = await event.get_chat()
             chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", "Unknown")
             chat_folder = get_chat_folder(chat_id, chat_name)
+            chat_type = canonical_chat_type(chat)
+            is_forum = bool(getattr(chat, "forum", False))
 
-            sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
-            media_type = classify_media(message)
-
-            _cid, _mid = chat_id, message.id
-            _sid, _sname = sender_id, sender_name
-            _out = bool(message.out)
-            _date = int(message.date.timestamp())
-            _text = message.text
-            _mtype = media_type
-            _chat_type = chat.__class__.__name__.lower()
+            row = await build_message_row(chat_id, message, client)
+            topic_create = extract_topic_create(message)
 
             def _write():
-                db.upsert_chat(_cid, chat_name, _chat_type)
-                db.insert_message(
-                    chat_id=_cid,
-                    message_id=_mid,
-                    sender_id=_sid,
-                    sender_name=_sname,
-                    is_outgoing=_out,
-                    date_unix=_date,
-                    text=_text,
-                    media_type=_mtype,
-                    file_path=None,
-                )
-                db.set_last_synced_message_id(_cid, _mid)
+                db.upsert_chat(chat_id, chat_name, chat_type, **chat_metadata(chat))
+                db.insert_message(**row)
+                if is_forum and row["topic_id"] is not None:
+                    db.upsert_topic(chat_id, row["topic_id"], last_message_id=message.id, **(topic_create or {}))
+                db.set_last_synced_message_id(chat_id, message.id)
                 db.commit()
 
             _with_db_retry(_write)
-            logger.info("Saved message chat=%s id=%s type=%s out=%s", chat_id, message.id, media_type or "text", _out)
+            logger.info("Saved message chat=%s id=%s type=%s out=%s", chat_id, message.id, row["media_type"] or "text", row["is_outgoing"])
 
-            if media_type is not None and settings.download_media:
-                asyncio.create_task(_download_and_attach(message, chat_id, chat_folder, sender_name))
+            broadcast("new_message", {
+                "chat_id": chat_id,
+                "message_id": message.id,
+                "sender_id": row["sender_id"],
+                "sender_name": row["sender_name"],
+                "is_outgoing": row["is_outgoing"],
+                "date_unix": row["date_unix"],
+                "text": row["text"],
+                "media_type": row["media_type"],
+                "file_path": None,
+                "file_name": row["file_name"],
+                "file_size": row["file_size"],
+                "media_duration": row["media_duration"],
+                "media_group_id": row["media_group_id"],
+                "is_forward": row["is_forward"],
+                "fwd_from_author": row["fwd_from_author"],
+                "reply_to_message_id": row["reply_to_message_id"],
+                "topic_id": row["topic_id"],
+            })
+
+            if row["media_type"] is not None and settings.download_media:
+                asyncio.create_task(_download_and_attach(message, chat_id, chat_folder, row["sender_name"]))
         except Exception:
             logger.exception("Error in NewMessage handler for chat=%s msg=%s", event.chat_id, getattr(event.message, 'id', '?'))
 
@@ -136,6 +151,13 @@ def register_handlers(client) -> None:
 
             _with_db_retry(_write_edit)
 
+            broadcast("message_edit", {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "new_text": message.text,
+                "edited_at_unix": int(time.time()),
+            })
+
             media_type = classify_media(message)
             if media_type:
                 def _check_media():
@@ -157,16 +179,44 @@ def register_handlers(client) -> None:
     @client.on(events.MessageDeleted)
     async def delete_handler(event) -> None:
         try:
+            from telethon.utils import get_peer_id
+
+            deleted_ids = list(getattr(event, "deleted_ids", None) or [])
+
             chat_id = event.chat_id
+            if chat_id is None:
+                update = getattr(event, 'original_update', None)
+                if update:
+                    peer = getattr(update, 'peer', None)
+                    if peer:
+                        chat_id = get_peer_id(peer)
+                    elif hasattr(update, 'channel_id') and update.channel_id:
+                        chat_id = int(f"-100{update.channel_id}")
+
+            if chat_id is None and deleted_ids:
+                msg_id = deleted_ids[0]
+                row = db.get_connection().execute(
+                    "SELECT DISTINCT chat_id FROM messages WHERE message_id = ? LIMIT 1",
+                    (msg_id,),
+                ).fetchone()
+                if row:
+                    chat_id = row[0]
+                    logger.info("Resolved chat_id=%s from DB for deleted msg %s", chat_id, msg_id)
+
+            if chat_id is None or not deleted_ids:
+                logger.warning("MessageDeleted event without chat_id, skipped ids=%s", deleted_ids)
+                return
 
             def _write_del():
-                for msg_id in event.deleted_ids:
+                for msg_id in deleted_ids:
+                    db.save_message_snapshot(chat_id, msg_id)
                     db.record_deletion(chat_id, msg_id)
-                    db.delete_message(chat_id, msg_id)
                     logger.info("Deletion recorded chat=%s id=%s", chat_id, msg_id)
                 db.commit()
 
             _with_db_retry(_write_del)
+            for msg_id in deleted_ids:
+                broadcast("message_delete", {"chat_id": chat_id, "message_id": msg_id})
         except Exception:
             logger.exception("Error in MessageDeleted handler for chat=%s", event.chat_id)
 
@@ -176,124 +226,35 @@ async def _initial_backfill(client) -> None:
     logger.info("=== Initial backfill: text for all chats ===")
     async for dialog in client.iter_dialogs():
         chat_id = dialog.id
-        chat_name = dialog.name or "Unknown"
         last_synced = db.get_last_synced_message_id(chat_id)
 
         if last_synced > 0:
-            logger.info("  %s: already synced to id=%s, catching up...", chat_name, last_synced)
+            logger.info("  %s: already synced to id=%s, catching up...", dialog.name, last_synced)
         else:
-            logger.info("  %s: new chat, backfilling from start...", chat_name)
-
-        chat_folder = get_chat_folder(chat_id, chat_name)
-        db.upsert_chat(chat_id, chat_name, dialog.entity.__class__.__name__.lower())
-
-        count = 0
-        highest_seen = last_synced
-        flood_retries = 0
+            logger.info("  %s: new chat, backfilling from start...", dialog.name)
 
         try:
-            async for message in client.iter_messages(dialog, min_id=last_synced, reverse=True):
-                try:
-                    sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
-                    media_type = classify_media(message)
-
-                    db.insert_message(
-                        chat_id=chat_id,
-                        message_id=message.id,
-                        sender_id=sender_id,
-                        sender_name=sender_name,
-                        is_outgoing=bool(message.out),
-                        date_unix=int(message.date.timestamp()),
-                        text=message.text,
-                        media_type=media_type,
-                        file_path=None,
-                    )
-                    highest_seen = max(highest_seen, message.id)
-                    count += 1
-                    flood_retries = 0
-
-                    if count % 500 == 0:
-                        db.set_last_synced_message_id(chat_id, highest_seen)
-                        db.commit()
-                        logger.info("  %s: %s messages backfilled", chat_name, count)
-
-                except FloodWaitError as e:
-                    flood_retries += 1
-                    if flood_retries > 5:
-                        logger.error("  %s: too many flood waits, moving on", chat_name)
-                        break
-                    wait = min(e.seconds + 1, 600)
-                    logger.warning("  %s: flood wait %ss", chat_name, wait)
-                    await asyncio.sleep(wait)
-                except Exception:
-                    logger.exception("  %s: error on message, skipping", chat_name)
-                    continue
-
-            db.set_last_synced_message_id(chat_id, highest_seen)
-            db.commit()
+            count = await backfill_chat(client, dialog, skip_media=True)
             if count > 0:
-                logger.info("  %s: backfill done (%s new messages)", chat_name, count)
+                logger.info("  %s: backfill done (%s new messages)", dialog.name, count)
         except Exception:
-            logger.exception("  %s: failed to backfill", chat_name)
+            logger.exception("  %s: failed to backfill", dialog.name)
 
     if settings.download_media:
         logger.info("=== Initial backfill: downloading missing media ===")
         async for dialog in client.iter_dialogs():
-            chat_id = dialog.id
-            chat_folder = get_chat_folder(chat_id, dialog.name)
-            DOWNLOADABLE = {"photos", "videos", "voice", "documents", "audio", "stickers", "animations", "other"}
-            rows = db.get_messages_missing_media(chat_id)
-            rows = [r for r in rows if r[1] in DOWNLOADABLE]
-            if not rows:
-                continue
-
-            needed = {row[0]: row[2] or "Unknown User" for row in rows}
-            logger.info("  %s: %s messages missing media", dialog.name, len(needed))
-            count = 0
-            total_needed = len(needed)
-
-            BATCH = 100
-            ids = list(needed.keys())
-            for i in range(0, len(ids), BATCH):
-                batch = ids[i:i + BATCH]
-                try:
-                    messages = await client.get_messages(dialog, ids=batch)
-                    if not isinstance(messages, list):
-                        messages = [messages]
-                    for message in messages:
-                        if message is None or message.id not in needed:
-                            continue
-                        sender_name = needed.pop(message.id)
-                        try:
-                            file_path = await download_with_retry(
-                                message, settings.media_dir, chat_id,
-                                chat_folder=chat_folder, sender_name=sender_name,
-                            )
-                            if file_path:
-                                db.update_message_file_path(chat_id, message.id, file_path)
-                                count += 1
-                        except FloodWaitError as e:
-                            wait = min(e.seconds + 1, 600)
-                            await asyncio.sleep(wait)
-                        except Exception:
-                            logger.exception("  %s: failed download msg %s", dialog.name, message.id)
-                    db.commit()
-                    if count % 50 == 0 and count > 0:
-                        logger.info("  %s: downloaded %s/%s media", dialog.name, count, total_needed)
-                except FloodWaitError as e:
-                    wait = min(e.seconds + 1, 600)
-                    await asyncio.sleep(wait)
-                except Exception:
-                    logger.exception("  %s: batch error at offset %s", dialog.name, i)
-
-            db.commit()
-            logger.info("  %s: media done (%s files)", dialog.name, count)
+            try:
+                count = await download_missing_media_chat(client, dialog)
+                if count > 0:
+                    logger.info("  %s: media done (%s files)", dialog.name, count)
+            except Exception:
+                logger.exception("  %s: failed media download", dialog.name)
 
     logger.info("=== Initial backfill complete ===")
 
 
 async def _catchup_loop(client) -> None:
-    """Periodically: backfill any new chats and download missing media."""
+    """Periodically: backfill missed messages and download missing media."""
     while True:
         await asyncio.sleep(CATCHUP_INTERVAL)
         try:
@@ -301,77 +262,16 @@ async def _catchup_loop(client) -> None:
 
             async for dialog in client.iter_dialogs():
                 chat_id = dialog.id
-                last_synced = db.get_last_synced_message_id(chat_id)
-                if last_synced == 0:
+                if db.get_last_synced_message_id(chat_id) == 0:
                     continue
-
-                chat_folder = get_chat_folder(chat_id, dialog.name)
-                count = 0
-                highest_seen = last_synced
-                async for message in client.iter_messages(dialog, min_id=last_synced, reverse=True):
-                    try:
-                        sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
-                        media_type = classify_media(message)
-                        db.insert_message(
-                            chat_id=chat_id,
-                            message_id=message.id,
-                            sender_id=sender_id,
-                            sender_name=sender_name,
-                            is_outgoing=bool(message.out),
-                            date_unix=int(message.date.timestamp()),
-                            text=message.text,
-                            media_type=media_type,
-                            file_path=None,
-                        )
-                        highest_seen = max(highest_seen, message.id)
-                        count += 1
-                        if count % 200 == 0:
-                            db.set_last_synced_message_id(chat_id, highest_seen)
-                            db.commit()
-                    except FloodWaitError:
-                        break
-                    except Exception:
-                        continue
-
-                if count > 0:
-                    db.set_last_synced_message_id(chat_id, highest_seen)
-                    db.commit()
-                    logger.info("  %s: caught up %s messages", dialog.name, count)
-
-                if settings.download_media:
-                    DOWNLOADABLE = {"photos", "videos", "voice", "documents", "audio", "stickers", "animations", "other"}
-                    rows = db.get_messages_missing_media(chat_id)
-                    rows = [r for r in rows if r[1] in DOWNLOADABLE]
-                    if rows:
-                        needed = {row[0]: row[2] or "Unknown User" for row in rows}
-                        BATCH = 100
-                        ids = list(needed.keys())
-                        for i in range(0, len(ids), BATCH):
-                            batch = ids[i:i + BATCH]
-                            try:
-                                messages = await client.get_messages(dialog, ids=batch)
-                                if not isinstance(messages, list):
-                                    messages = [messages]
-                                for message in messages:
-                                    if message is None or message.id not in needed:
-                                        continue
-                                    sender_name = needed.pop(message.id)
-                                    try:
-                                        file_path = await download_with_retry(
-                                            message, settings.media_dir, chat_id,
-                                            chat_folder=chat_folder, sender_name=sender_name,
-                                        )
-                                        if file_path:
-                                            db.update_message_file_path(chat_id, message.id, file_path)
-                                    except FloodWaitError:
-                                        break
-                                    except Exception:
-                                        continue
-                                db.commit()
-                            except FloodWaitError:
-                                break
-                            except Exception:
-                                continue
+                try:
+                    count = await backfill_chat(client, dialog, skip_media=True)
+                    if count > 0:
+                        logger.info("  %s: caught up %s messages", dialog.name, count)
+                    if settings.download_media:
+                        await download_missing_media_chat(client, dialog)
+                except Exception:
+                    logger.exception("  %s: catch-up failed", dialog.name)
 
             logger.info("=== Catch-up cycle complete ===")
         except Exception:
@@ -393,6 +293,14 @@ async def _heartbeat(client):
 
 
 async def run_listener() -> None:
+    try:
+        summary = reconcile_media()
+        logger.info("Media reconciliation: %s", summary)
+    except Exception:
+        logger.exception("Media reconciliation failed")
+
+    await start_sse_server()
+
     client = build_client()
     await start_client(client)
     register_handlers(client)

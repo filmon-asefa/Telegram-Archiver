@@ -8,6 +8,8 @@
     python -m src.main --media-only           # download media for messages missing it
     python -m src.main --listen               # live listener only
     python -m src.main --reorganize-media     # migrate media into human-readable folders
+    python -m src.main --resolve-forwards      # resolve forward source names for existing messages
+    python -m src.main --resolve-topics        # fetch real topic names/metadata for forum chats
 """
 from __future__ import annotations
 
@@ -17,15 +19,23 @@ import logging
 
 from . import db
 from .backfill import run_backfill, run_media_download
+from .forward_fix import run_resolve
 from .listener import run_listener
+from .reconcile_media import reconcile_media
 from .reorganize_media import reorganize_media
+from .resolve_topics import run_resolve_topics
 
 logger = logging.getLogger(__name__)
 
 
-async def run(do_backfill: bool, do_listen: bool, force: bool = False,
-              chat_id: int | None = None, skip_media: bool = False,
-              media_only: bool = False) -> None:
+async def run(
+    do_backfill: bool,
+    do_listen: bool,
+    force: bool = False,
+    chat_id: int | None = None,
+    skip_media: bool = False,
+    media_only: bool = False,
+) -> None:
     if media_only:
         logger.info("=== Downloading missing media ===")
         await run_media_download(chat_id=chat_id)
@@ -50,7 +60,25 @@ def main() -> None:
         action="store_true",
         help="Migrate media into YYYY/<Month>/DD/<Chat Name> [<id>]/<type>/HH-MM-SS_<Sender>_message_<id>.ext, then exit",
     )
+    parser.add_argument(
+        "--scan-media",
+        action="store_true",
+        help="Reconcile messages.file_path against media files already on disk, then exit",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --scan-media: report what would be linked without writing",
+    )
+    parser.add_argument("--resolve-forwards", action="store_true", help="Resolve forward source names for existing messages")
+    parser.add_argument("--resolve-topics", action="store_true", help="Fetch real topic names/metadata for forum chats")
     args = parser.parse_args()
+
+    if args.scan_media:
+        summary = reconcile_media(dry_run=args.dry_run)
+        logger.info("Media reconciliation result: %s", summary)
+        db.close()
+        return
 
     if args.reorganize_media:
         count = reorganize_media()
@@ -58,15 +86,22 @@ def main() -> None:
         db.close()
         return
 
-    do_backfill = args.backfill or args.backfill_all or args.backfill_chat is not None or args.media_only or (not args.listen)
-    do_listen = args.listen or (not args.backfill and not args.backfill_all and args.backfill_chat is None and not args.media_only)
+    if args.resolve_forwards:
+        asyncio.run(run_resolve())
+        db.close()
+        return
 
-    if args.listen and not args.backfill and not args.backfill_all and args.backfill_chat is None and not args.media_only:
-        do_backfill = False
+    if args.resolve_topics:
+        asyncio.run(run_resolve_topics(chat_id=args.backfill_chat))
+        db.close()
+        return
+
+    has_backfill_task = args.backfill or args.backfill_all or args.backfill_chat is not None or args.media_only
 
     try:
         asyncio.run(run(
-            do_backfill, do_listen,
+            do_backfill=not args.listen or has_backfill_task,
+            do_listen=args.listen or not has_backfill_task,
             force=args.backfill_all,
             chat_id=args.backfill_chat,
             skip_media=args.no_media,

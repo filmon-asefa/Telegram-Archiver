@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useState, useEffect, useCallback } from "react";
+import { usePathname } from "next/navigation";
+import { memo, useState, useEffect, useRef, useCallback } from "react";
 import {
   formatChatListDate,
   truncate,
   getAvatarColor,
   getInitials,
+  normalizeChatType,
 } from "@/lib/utils";
+import { useSseEvents } from "@/lib/useSseEvents";
 
 interface Chat {
   chat_id: number;
@@ -20,7 +22,8 @@ interface Chat {
 }
 
 function ChatTypeBadge({ chatType }: { chatType: string }) {
-  if (chatType === "channel") {
+  const type = normalizeChatType(chatType);
+  if (type === "channel") {
     return (
       <div
         className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
@@ -32,7 +35,7 @@ function ChatTypeBadge({ chatType }: { chatType: string }) {
       </div>
     );
   }
-  if (chatType === "chat") {
+  if (type === "group" || type === "supergroup") {
     return (
       <div
         className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
@@ -44,15 +47,115 @@ function ChatTypeBadge({ chatType }: { chatType: string }) {
       </div>
     );
   }
+  if (type === "forum") {
+    return (
+      <div
+        className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
+        style={{ background: "var(--bg-chat-list)", border: "2px solid var(--bg-chat-list)" }}
+      >
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="#4ecca3">
+          <path d="M4 6h16v2H4zM4 11h10v2H4zM4 16h7v2H4z" />
+        </svg>
+      </div>
+    );
+  }
+  if (type === "bot") {
+    return (
+      <div
+        className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center"
+        style={{ background: "var(--bg-chat-list)", border: "2px solid var(--bg-chat-list)" }}
+      >
+        <span className="text-[9px] leading-none">🤖</span>
+      </div>
+    );
+  }
   return null;
 }
 
+const ChatRow = memo(function ChatRow({ chat, isActive }: { chat: Chat; isActive: boolean }) {
+  const name = chat.chat_name || "Unknown";
+  const type = normalizeChatType(chat.chat_type);
+  const isGroup = type === "group" || type === "supergroup";
+  const isChannel = type === "channel";
+  const isForum = type === "forum";
+  return (
+    <Link
+      href={`/chat/${chat.chat_id}`}
+      className="flex items-center gap-3 px-3 py-[7px] cursor-pointer transition-colors"
+      style={{
+        background: isActive ? "var(--bg-chat-active)" : "transparent",
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) e.currentTarget.style.background = "var(--bg-chat-hover)";
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) e.currentTarget.style.background = "transparent";
+      }}
+    >
+      <div className="relative shrink-0">
+        <div
+          className="w-[50px] h-[50px] rounded-full flex items-center justify-center text-white font-semibold text-lg"
+          style={{ background: getAvatarColor(name) }}
+        >
+          {getInitials(name)}
+        </div>
+        <ChatTypeBadge chatType={chat.chat_type} />
+      </div>
+      <div className="flex-1 min-w-0 border-b py-[7px]" style={{ borderColor: "var(--border)" }}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 min-w-0">
+            {isChannel && (
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="var(--text-accent)">
+                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12H7v-2h5v2zm5-4H7V8h10v2z" />
+              </svg>
+            )}
+            {(isGroup || isForum) && (
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="#4ecca3">
+                <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+              </svg>
+            )}
+            <span
+              className="font-semibold text-[14.5px] truncate"
+              style={{ color: "var(--text-primary)" }}
+            >
+              {name}
+            </span>
+          </div>
+          <span
+            className="text-xs shrink-0"
+            style={{ color: isActive ? "#a0c4e8" : "var(--text-secondary)" }}
+          >
+            {formatChatListDate(chat.last_message_date)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2 mt-[2px]">
+          <span
+            className="text-[13px] truncate"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            {truncate(chat.last_message_text, 55) || "No messages"}
+          </span>
+          <span
+            className="text-[11px] shrink-0 px-1.5 py-0.5 rounded-full font-medium"
+            style={{ background: "var(--bg-chat-active)", color: "var(--text-primary)" }}
+          >
+            {chat.message_count.toLocaleString()}
+          </span>
+        </div>
+      </div>
+    </Link>
+  );
+});
+
 export default function ChatList() {
-  const searchParams = useSearchParams();
-  const activeId = searchParams.get("id");
+  const pathname = usePathname();
+  const activeId = pathname.startsWith("/chat/") ? pathname.split("/")[2] : null;
   const [chats, setChats] = useState<Chat[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const listRef = useRef<HTMLDivElement>(null);
+  const savedScrollRef = useRef(0);
+  const transitioningRef = useRef(false);
 
   const fetchChats = useCallback(async (q?: string) => {
     setLoading(true);
@@ -67,12 +170,58 @@ export default function ChatList() {
     fetchChats();
   }, [fetchChats]);
 
+  const refreshOnEvent = useCallback(() => {
+    fetchChats();
+  }, [fetchChats]);
+
+  useSseEvents({
+    new_message: refreshOnEvent,
+    message_edit: refreshOnEvent,
+    message_delete: refreshOnEvent,
+    media_ready: refreshOnEvent,
+  });
+
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchChats(query || undefined);
     }, 300);
     return () => clearTimeout(timer);
   }, [query, fetchChats]);
+
+  const handleListScroll = () => {
+    // Ignore the bogus scrollTo(0) event the browser fires when Next.js
+    // re-attaches the layout subtree mid-navigation; it would clobber the
+    // position we're trying to preserve.
+    if (transitioningRef.current) return;
+    if (listRef.current) savedScrollRef.current = listRef.current.scrollTop;
+  };
+
+  const markTransitioning = () => {
+    transitioningRef.current = true;
+    window.setTimeout(() => {
+      transitioningRef.current = false;
+    }, 1500);
+  };
+
+  // Preserve scroll position across route transitions: Next.js re-attaches the
+  // layout subtree ~100ms after navigation starts, which resets inner scrollTop
+  // to 0. Poll for a short window to re-apply the saved position after the reset.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const target = savedScrollRef.current;
+    let attempts = 0;
+    el.scrollTop = target;
+    const timer = setInterval(() => {
+      attempts++;
+      if (el.scrollTop !== target) el.scrollTop = target;
+      if (attempts >= 20) {
+        clearInterval(timer);
+        transitioningRef.current = false;
+      }
+    }, 50);
+    return () => clearInterval(timer);
+  }, [pathname]);
 
   return (
     <div className="flex flex-col h-full" style={{ background: "var(--bg-chat-list)" }}>
@@ -102,7 +251,7 @@ export default function ChatList() {
           />
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" ref={listRef} onScroll={handleListScroll} onClickCapture={markTransitioning}>
         {loading ? (
           <div className="p-4 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
             Loading…
@@ -112,80 +261,9 @@ export default function ChatList() {
             No chats found
           </div>
         ) : (
-          chats.map((chat) => {
-            const isActive = activeId === String(chat.chat_id);
-            const name = chat.chat_name || "Unknown";
-            const isGroup = chat.chat_type === "chat";
-            const isChannel = chat.chat_type === "channel";
-            return (
-              <Link
-                key={chat.chat_id}
-                href={`/chat/${chat.chat_id}`}
-                className="flex items-center gap-3 px-3 py-[7px] cursor-pointer transition-colors"
-                style={{
-                  background: isActive ? "var(--bg-chat-active)" : "transparent",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) e.currentTarget.style.background = "var(--bg-chat-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) e.currentTarget.style.background = "transparent";
-                }}
-              >
-                <div className="relative shrink-0">
-                  <div
-                    className="w-[50px] h-[50px] rounded-full flex items-center justify-center text-white font-semibold text-lg"
-                    style={{ background: getAvatarColor(name) }}
-                  >
-                    {getInitials(name)}
-                  </div>
-                  <ChatTypeBadge chatType={chat.chat_type} />
-                </div>
-                <div className="flex-1 min-w-0 border-b py-[7px]" style={{ borderColor: "var(--border)" }}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1 min-w-0">
-                      {isChannel && (
-                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="var(--text-accent)">
-                          <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12H7v-2h5v2zm5-4H7V8h10v2z" />
-                        </svg>
-                      )}
-                      {isGroup && (
-                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="#4ecca3">
-                          <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
-                        </svg>
-                      )}
-                      <span
-                        className="font-semibold text-[14.5px] truncate"
-                        style={{ color: "var(--text-primary)" }}
-                      >
-                        {name}
-                      </span>
-                    </div>
-                    <span
-                      className="text-xs shrink-0"
-                      style={{ color: isActive ? "#a0c4e8" : "var(--text-secondary)" }}
-                    >
-                      {formatChatListDate(chat.last_message_date)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2 mt-[2px]">
-                    <span
-                      className="text-[13px] truncate"
-                      style={{ color: "var(--text-secondary)" }}
-                    >
-                      {truncate(chat.last_message_text, 55) || "No messages"}
-                    </span>
-                    <span
-                      className="text-[11px] shrink-0 px-1.5 py-0.5 rounded-full font-medium"
-                      style={{ background: "var(--bg-chat-active)", color: "var(--text-primary)" }}
-                    >
-                      {chat.message_count.toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-              </Link>
-            );
-          })
+          chats.map((chat) => (
+            <ChatRow key={chat.chat_id} chat={chat} isActive={activeId === String(chat.chat_id)} />
+          ))
         )}
       </div>
     </div>

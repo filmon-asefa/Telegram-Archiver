@@ -73,12 +73,16 @@ function MediaItem({ item }: { item: MediaMessage }) {
   }
 
   const name = item.chat_name || "Unknown";
+  const isDocument = item.media_type === "documents";
 
   return (
     <a
-      href={`/chat/${item.chat_id}?msg=${item.message_id}`}
+      href={isDocument && src ? src : `/chat/${item.chat_id}?msg=${item.message_id}`}
+      target={isDocument && src ? "_blank" : undefined}
+      rel={isDocument && src ? "noreferrer" : undefined}
       className="group relative aspect-square overflow-hidden"
       style={{ borderRadius: "8px" }}
+      title={isDocument && src ? `Open ${src.split("/").pop()}` : undefined}
     >
       {content}
       <div

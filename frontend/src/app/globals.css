@@ -111,3 +111,500 @@ body {
   margin-bottom: 1px;
   line-height: 1.3;
 }
+
+/* Telegram Desktop-style reply header shown above a message that replies to another */
+.reply-header {
+  border-left: 2px solid var(--text-accent);
+  border-radius: 4px;
+  padding: 2px 8px;
+  margin-bottom: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.reply-header-sender {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reply-header-preview {
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.reply-header-muted {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+/* "Deleted on Telegram" badge — archive keeps the original content visible */
+.deleted-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: #ff5c5c;
+  background: rgba(255, 68, 68, 0.1);
+  border: 1px solid rgba(255, 68, 68, 0.28);
+  border-radius: 6px;
+  padding: 0 6px;
+  animation: deletedBadgeIn 0.3s ease-out both;
+}
+
+/* Badge overlaid on top of preserved media thumbnails */
+.deleted-badge-overlay {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  color: #ff8080;
+  background: rgba(20, 20, 24, 0.82);
+  border-color: rgba(255, 92, 92, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+/* Deleted text: strikethrough + subtle fade; content is preserved */
+.deleted-text {
+  text-decoration: line-through;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 1px;
+  opacity: 0.75;
+}
+
+/* Deleted media: keep viewable/playable, slightly muted; badge stays crisp */
+.deleted-fade {
+  opacity: 0.8;
+}
+
+/* Red accent bar on deleted bubbles */
+.deleted-bubble {
+  box-shadow: inset 2px 0 0 rgba(255, 68, 68, 0.45);
+}
+
+@keyframes deletedBadgeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Brief highlight when jumping to a message from a reply or URL */
+@keyframes highlightFlash {
+  0% {
+    background-color: rgba(64, 167, 227, 0.35);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.highlight-flash {
+  border-radius: 12px;
+  animation: highlightFlash 1.5s ease-out both;
+}
+
+/* Telegram Desktop-style voice message */
+.message-bubble.voice-bubble {
+  padding: 8px 12px;
+  border-radius: 18px;
+  width: min(380px, 84vw);
+  max-width: min(420px, 92vw);
+}
+
+.message-bubble.voice-bubble.out {
+  border-bottom-right-radius: 18px;
+}
+
+.message-bubble.voice-bubble.in {
+  border-bottom-left-radius: 18px;
+}
+
+.voice-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.voice-play-btn {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: transparent;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.voice-play-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(1.06);
+}
+
+.voice-play-btn:active {
+  transform: scale(0.95);
+}
+
+.voice-play-btn:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+.voice-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+}
+
+.voice-waveform {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  width: 100%;
+  min-width: 0;
+  cursor: default;
+  outline: none;
+  border-radius: 4px;
+}
+
+.voice-waveform:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+.voice-bar {
+  width: 3px;
+  border-radius: 1.5px;
+  flex-shrink: 0;
+  transition: background-color 0.12s ease-out;
+}
+
+@keyframes voiceBarPulse {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.7);
+  }
+}
+
+.voice-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.voice-time {
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+}
+
+.voice-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 16px;
+}
+
+.voice-edited {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  font-family: inherit;
+}
+
+.voice-edited:hover {
+  text-decoration: underline;
+}
+
+.voice-edited:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.voice-caption {
+  font-size: 14.5px;
+  line-height: 1.3;
+  margin: 4px 0 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  width: 100%;
+}
+
+/* ---- Responsive app shell (Telegram Desktop-style split pane) ---- */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-sidebar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-chat-list);
+  border-right: 1px solid var(--border);
+  flex: none;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Desktop (>=1024px): sidebar + conversation + inline info panel */
+@media (min-width: 1024px) {
+  .app-sidebar {
+    width: 350px;
+  }
+}
+
+/* Tablet (768px-1023px): sidebar + conversation (info panel becomes a drawer) */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-sidebar {
+    width: 320px;
+  }
+}
+
+/* Mobile (<768px): slide panes like Telegram Mobile */
+@media (max-width: 767px) {
+  .app-shell {
+    position: relative;
+  }
+  .app-sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    transform: translateX(0);
+    transition: transform 0.3s ease;
+    z-index: 30;
+    border-right: none;
+  }
+  .app-sidebar.is-hidden {
+    transform: translateX(-100%);
+  }
+  .app-main {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    z-index: 20;
+  }
+  .app-main.is-active {
+    transform: translateX(0);
+  }
+}
+
+/* Info panel: inline third column on desktop, slide-over drawer on tablet */
+.info-panel {
+  width: 300px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* Forum chats: info panel is always a drawer (topics take the third column) */
+.info-panel.info-panel-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  transform: translateX(105%);
+  visibility: hidden;
+  transition: transform 0.3s ease, visibility 0.3s;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+}
+
+.info-panel.info-panel-drawer.info-panel-open {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+@media (max-width: 1023px) {
+  .info-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    transform: translateX(105%);
+    visibility: hidden;
+    transition: transform 0.3s ease, visibility 0.3s;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+  }
+  .info-panel.info-panel-open {
+    transform: translateX(0);
+    visibility: visible;
+  }
+}
+
+.info-backdrop {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .info-backdrop.info-backdrop-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Forum chats: backdrop shows on all screen sizes */
+.info-backdrop.info-backdrop-always.info-backdrop-open {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+/* Topic panel: inline column on tablet/desktop, slide-over drawer on mobile */
+.topics-panel {
+  width: 300px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-chat-list);
+  border-left: 1px solid var(--border);
+}
+
+@media (min-width: 768px) {
+  .topics-panel-desktop {
+    display: flex;
+  }
+  .topics-panel-mobile {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .topics-panel-desktop {
+    display: none;
+  }
+  .topics-panel-mobile {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 320px;
+    z-index: 50;
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform 0.3s ease, visibility 0.3s;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.35);
+  }
+  .topics-panel-mobile.topics-panel-mobile-open {
+    transform: translateX(0);
+    visibility: visible;
+  }
+}
+
+.topics-backdrop {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .topics-backdrop.topics-backdrop-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* ---- Archive explorer (interactive statistics panel) ---- */
+.archive-explorer {
+  animation: archiveExplorerIn 0.22s ease-out both;
+}
+
+@keyframes archiveExplorerIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Masonry grid for the Photos / GIFs / Stickers / Albums views */
+.archive-masonry {
+  columns: 2;
+  column-gap: 6px;
+}
+
+@media (min-width: 640px) {
+  .archive-masonry {
+    columns: 3;
+  }
+}
+
+@media (min-width: 1024px) {
+  .archive-masonry {
+    columns: 4;
+  }
+}
+
+@media (min-width: 1536px) {
+  .archive-masonry {
+    columns: 5;
+  }
+}

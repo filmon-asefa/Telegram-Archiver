@@ -13,7 +13,14 @@ export async function GET(
   }
 
   const limit = parseInt(req.nextUrl.searchParams.get("limit") || "50", 10);
-  const deleted = getDeletedMessages(chatId, limit);
+  const topicId = req.nextUrl.searchParams.get("topic_id");
+  const topicFilter = topicId === null || topicId === ""
+    ? undefined
+    : topicId === "general"
+      ? "general" as const
+      : (parseInt(topicId, 10) || undefined);
+
+  const deleted = getDeletedMessages(chatId, limit, topicFilter);
   return NextResponse.json(deleted.map((d: Record<string, unknown>) => ({
     ...d,
     text: sanitizeText(d.text as string | null),

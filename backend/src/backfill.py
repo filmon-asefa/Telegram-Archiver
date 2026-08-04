@@ -20,10 +20,14 @@ from telethon.errors import FloodWaitError
 from . import db
 from .config import settings
 from .telegram_client import (
+    DOWNLOADABLE_MEDIA_TYPES,
     build_client,
-    classify_media,
+    build_message_row,
+    canonical_chat_type,
+    chat_metadata,
+    document_meta,
     download_with_retry,
-    sender_display_name,
+    extract_topic_create,
     start_client,
 )
 from .utils.media_storage import get_chat_folder
@@ -41,7 +45,9 @@ async def _sleep_flood(e: FloodWaitError) -> None:
 
 async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = False) -> int:
     chat_id = dialog.id
-    db.upsert_chat(chat_id, dialog.name or "Unknown", dialog.entity.__class__.__name__.lower())
+    entity = dialog.entity
+    db.upsert_chat(chat_id, dialog.name or "Unknown", canonical_chat_type(entity), **chat_metadata(entity))
+    is_forum = bool(getattr(entity, "forum", False))
     chat_folder = get_chat_folder(chat_id, dialog.name)
 
     min_id = 0 if force else db.get_last_synced_message_id(chat_id)
@@ -53,28 +59,19 @@ async def backfill_chat(client, dialog, force: bool = False, skip_media: bool = 
     flood_retries = 0
     async for message in client.iter_messages(dialog, min_id=min_id, reverse=True):
         try:
-            media_type = classify_media(message)
-            file_path = None
+            row = await build_message_row(chat_id, message, client)
 
-            sender_id, sender_name = await sender_display_name(message, is_outgoing=bool(message.out))
-
-            if media_type is not None and settings.download_media and not skip_media:
+            if row["media_type"] is not None and settings.download_media and not skip_media:
                 file_path = await download_with_retry(
                     message, settings.media_dir, chat_id,
-                    chat_folder=chat_folder, sender_name=sender_name,
+                    chat_folder=chat_folder, sender_name=row["sender_name"],
                 )
+                if file_path:
+                    row["file_path"] = file_path
 
-            db.insert_message(
-                chat_id=chat_id,
-                message_id=message.id,
-                sender_id=sender_id,
-                sender_name=sender_name,
-                is_outgoing=bool(message.out),
-                date_unix=int(message.date.timestamp()),
-                text=message.text,
-                media_type=media_type,
-                file_path=file_path,
-            )
+            db.insert_message(**row)
+            if is_forum and row["topic_id"] is not None:
+                db.upsert_topic(chat_id, row["topic_id"], last_message_id=message.id, **(extract_topic_create(message) or {}))
             highest_seen = max(highest_seen, message.id)
             count += 1
             flood_retries = 0
@@ -103,9 +100,8 @@ async def download_missing_media_chat(client, dialog) -> int:
     """Download media by iterating chat messages — stable unlike per-message get_messages."""
     chat_id = dialog.id
     chat_folder = get_chat_folder(chat_id, dialog.name)
-    DOWNLOADABLE = {"photos", "videos", "voice", "documents", "audio", "stickers", "animations", "other"}
     rows = db.get_messages_missing_media(chat_id)
-    rows = [r for r in rows if r[1] in DOWNLOADABLE]
+    rows = [r for r in rows if r[1] in DOWNLOADABLE_MEDIA_TYPES]
     if not rows:
         return 0
 
@@ -132,7 +128,8 @@ async def download_missing_media_chat(client, dialog) -> int:
                         chat_folder=chat_folder, sender_name=sender_name,
                     )
                     if file_path:
-                        db.update_message_file_path(chat_id, message.id, file_path)
+                        file_name, file_size = document_meta(message)
+                        db.update_message_file_path(chat_id, message.id, file_path, file_name=file_name, file_size=file_size)
                         count += 1
                 except FloodWaitError as e:
                     await _sleep_flood(e)

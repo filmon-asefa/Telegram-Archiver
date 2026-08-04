@@ -161,6 +161,9 @@ PYTHONPATH=backend python3 -m src.main --listen
 
 # Reorganize media files into readable folders
 PYTHONPATH=backend python3 -m src.main --reorganize-media
+
+# Resolve forward source names for existing messages (after schema upgrade)
+PYTHONPATH=backend python3 -m src.main --resolve-forwards
 ```
 
 On Windows (Command Prompt):

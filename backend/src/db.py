@@ -19,8 +19,17 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
     chat_id INTEGER PRIMARY KEY,
     chat_name TEXT,
-    chat_type TEXT,               -- 'user', 'group', 'channel'
-    last_synced_message_id INTEGER DEFAULT 0
+    chat_type TEXT,               -- 'user' | 'bot' | 'group' | 'supergroup' | 'channel' | 'forum'
+    last_synced_message_id INTEGER DEFAULT 0,
+    username TEXT,
+    description TEXT,
+    participant_count INTEGER,
+    linked_chat_id INTEGER,
+    megagroup INTEGER NOT NULL DEFAULT 0,
+    broadcast INTEGER NOT NULL DEFAULT 0,
+    is_verified INTEGER NOT NULL DEFAULT 0,
+    forum INTEGER NOT NULL DEFAULT 0,
+    gigagroup INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -33,6 +42,19 @@ CREATE TABLE IF NOT EXISTS messages (
     text TEXT,
     media_type TEXT,              -- 'photos' | 'videos' | 'voice' | 'documents' | 'audio' | 'stickers' | 'animations' | 'contacts' | 'locations' | 'polls' | 'other' | NULL
     file_path TEXT,
+    file_name TEXT,               -- original filename for documents
+    file_size INTEGER,            -- original byte size, if known
+    media_duration INTEGER,       -- seconds, for voice/audio/video media
+    media_group_id INTEGER,       -- Telegram album/group id (message.grouped_id)
+    is_forward INTEGER NOT NULL DEFAULT 0,
+    fwd_from_chat_id INTEGER,
+    fwd_from_msg_id INTEGER,
+    fwd_from_date INTEGER,
+    fwd_from_author TEXT,
+    reply_to_message_id INTEGER,          -- message this one replies to, if any
+    topic_id INTEGER,                     -- forum topic root message id, NULL = General
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at_unix INTEGER,
     PRIMARY KEY (chat_id, message_id)
 );
 
@@ -79,9 +101,32 @@ CREATE TABLE IF NOT EXISTS message_snapshot (
     text TEXT,
     media_type TEXT,
     file_path TEXT,
+    is_forward INTEGER NOT NULL DEFAULT 0,
+    fwd_from_chat_id INTEGER,
+    fwd_from_msg_id INTEGER,
+    fwd_from_date INTEGER,
+    fwd_from_author TEXT,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at_unix INTEGER,
     snapshot_at_unix INTEGER NOT NULL,
     PRIMARY KEY (chat_id, message_id)
 );
+
+CREATE TABLE IF NOT EXISTS topics (
+    chat_id INTEGER NOT NULL,
+    topic_id INTEGER NOT NULL,            -- Telegram topic root message id
+    title TEXT,
+    icon_emoji_id INTEGER,
+    icon_color INTEGER,
+    created_at_unix INTEGER,
+    is_closed INTEGER NOT NULL DEFAULT 0,
+    is_hidden INTEGER NOT NULL DEFAULT 0,
+    last_message_id INTEGER,
+    PRIMARY KEY (chat_id, topic_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_topics_chat
+    ON topics (chat_id);
 """
 
 
@@ -103,22 +148,193 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     logger.info("Database ready at %s", db_path)
     return conn
 
 
-def upsert_chat(chat_id: int, chat_name: str, chat_type: str) -> None:
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add forward columns to tables that might have been created before they existed."""
+    migrations = [
+        ("messages", "is_forward", "INTEGER NOT NULL DEFAULT 0"),
+        ("messages", "fwd_from_chat_id", "INTEGER"),
+        ("messages", "fwd_from_msg_id", "INTEGER"),
+        ("messages", "fwd_from_date", "INTEGER"),
+        ("messages", "fwd_from_author", "TEXT"),
+        ("message_snapshot", "is_forward", "INTEGER NOT NULL DEFAULT 0"),
+        ("message_snapshot", "fwd_from_chat_id", "INTEGER"),
+        ("message_snapshot", "fwd_from_msg_id", "INTEGER"),
+        ("message_snapshot", "fwd_from_date", "INTEGER"),
+        ("message_snapshot", "fwd_from_author", "TEXT"),
+    ]
+    for table, col, col_type in migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+            logger.info("Migrated: added %s.%s", table, col)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    # reply_to_message_id added later
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER")
+        logger.info("Migrated: added messages.reply_to_message_id")
+    except sqlite3.OperationalError:
+        pass
+
+    # is_deleted / deleted_at_unix added later
+    for table in ("messages", "message_snapshot"):
+        for col, col_type in (("is_deleted", "INTEGER NOT NULL DEFAULT 0"), ("deleted_at_unix", "INTEGER")):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                logger.info("Migrated: added %s.%s", table, col)
+            except sqlite3.OperationalError:
+                pass
+
+    # media metadata added later (contextual deleted-message placeholders)
+    for col, col_type in (("media_duration", "INTEGER"), ("media_group_id", "INTEGER"), ("downloaded_at_unix", "INTEGER")):
+        try:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
+            logger.info("Migrated: added messages.%s", col)
+        except sqlite3.OperationalError:
+            pass
+
+    # original filename/size for documents
+    for col, col_type in (("file_name", "TEXT"), ("file_size", "INTEGER")):
+        try:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
+            logger.info("Migrated: added messages.%s", col)
+        except sqlite3.OperationalError:
+            pass
+
+    # forum topic support: chat metadata columns
+    for col, col_type in (
+        ("username", "TEXT"),
+        ("description", "TEXT"),
+        ("participant_count", "INTEGER"),
+        ("linked_chat_id", "INTEGER"),
+        ("megagroup", "INTEGER NOT NULL DEFAULT 0"),
+        ("broadcast", "INTEGER NOT NULL DEFAULT 0"),
+        ("is_verified", "INTEGER NOT NULL DEFAULT 0"),
+        ("forum", "INTEGER NOT NULL DEFAULT 0"),
+        ("gigagroup", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE chats ADD COLUMN {col} {col_type}")
+            logger.info("Migrated: added chats.%s", col)
+        except sqlite3.OperationalError:
+            pass
+
+    # messages.topic_id for forum topics
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN topic_id INTEGER")
+        logger.info("Migrated: added messages.topic_id")
+    except sqlite3.OperationalError:
+        pass
+
+    # messages.pinned for the archive explorer's Pinned filter
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        logger.info("Migrated: added messages.pinned")
+    except sqlite3.OperationalError:
+        pass
+
+    # normalize legacy chat_type values from older Telethon entity class names
+    conn.execute(
+        "UPDATE chats SET chat_type = 'group' "
+        "WHERE chat_type IN ('chat', 'chatforbidden', 'chatinviter')"
+    )
+    conn.execute(
+        "UPDATE chats SET chat_type = 'channel' "
+        "WHERE chat_type IN ('channelforbidden')"
+    )
+    conn.execute(
+        "UPDATE chats SET chat_type = 'supergroup' "
+        "WHERE chat_type = 'channel' AND megagroup = 1"
+    )
+    conn.execute(
+        "UPDATE chats SET chat_type = 'forum' "
+        "WHERE chat_type = 'channel' AND forum = 1"
+    )
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_topic ON messages (chat_id, topic_id)")
+
+
+def upsert_chat(
+    chat_id: int,
+    chat_name: str,
+    chat_type: str,
+    username: Optional[str] = None,
+    description: Optional[str] = None,
+    participant_count: Optional[int] = None,
+    linked_chat_id: Optional[int] = None,
+    megagroup: bool = False,
+    broadcast: bool = False,
+    is_verified: bool = False,
+    forum: bool = False,
+    gigagroup: bool = False,
+) -> None:
     conn = get_connection()
     conn.execute(
         """
-        INSERT INTO chats (chat_id, chat_name, chat_type)
-        VALUES (?, ?, ?)
+        INSERT INTO chats (
+            chat_id, chat_name, chat_type, username, description, participant_count,
+            linked_chat_id, megagroup, broadcast, is_verified, forum, gigagroup
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chat_id) DO UPDATE SET
             chat_name = excluded.chat_name,
-            chat_type = excluded.chat_type
+            chat_type = excluded.chat_type,
+            username = COALESCE(excluded.username, chats.username),
+            description = COALESCE(excluded.description, chats.description),
+            participant_count = COALESCE(excluded.participant_count, chats.participant_count),
+            linked_chat_id = COALESCE(excluded.linked_chat_id, chats.linked_chat_id),
+            megagroup = excluded.megagroup,
+            broadcast = excluded.broadcast,
+            is_verified = excluded.is_verified,
+            forum = excluded.forum,
+            gigagroup = excluded.gigagroup
         """,
-        (chat_id, chat_name, chat_type),
+        (
+            chat_id, chat_name, chat_type, username, description, participant_count,
+            linked_chat_id, 1 if megagroup else 0, 1 if broadcast else 0,
+            1 if is_verified else 0, 1 if forum else 0, 1 if gigagroup else 0,
+        ),
+    )
+
+
+def upsert_topic(
+    chat_id: int,
+    topic_id: int,
+    title: Optional[str] = None,
+    icon_emoji_id: Optional[int] = None,
+    icon_color: Optional[int] = None,
+    created_at_unix: Optional[int] = None,
+    is_closed: bool = False,
+    is_hidden: bool = False,
+    last_message_id: Optional[int] = None,
+) -> None:
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO topics (
+            chat_id, topic_id, title, icon_emoji_id, icon_color,
+            created_at_unix, is_closed, is_hidden, last_message_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id, topic_id) DO UPDATE SET
+            title = COALESCE(excluded.title, topics.title),
+            icon_emoji_id = COALESCE(excluded.icon_emoji_id, topics.icon_emoji_id),
+            icon_color = COALESCE(excluded.icon_color, topics.icon_color),
+            created_at_unix = COALESCE(excluded.created_at_unix, topics.created_at_unix),
+            is_closed = excluded.is_closed,
+            is_hidden = excluded.is_hidden,
+            last_message_id = excluded.last_message_id
+        """,
+        (
+            chat_id, topic_id, title, icon_emoji_id, icon_color,
+            created_at_unix, 1 if is_closed else 0, 1 if is_hidden else 0, last_message_id,
+        ),
     )
 
 
@@ -149,14 +365,34 @@ def insert_message(
     text: Optional[str],
     media_type: Optional[str],
     file_path: Optional[str],
+    media_duration: Optional[int] = None,
+    media_group_id: Optional[int] = None,
+    is_forward: bool = False,
+    fwd_from_chat_id: Optional[int] = None,
+    fwd_from_msg_id: Optional[int] = None,
+    fwd_from_date: Optional[int] = None,
+    fwd_from_author: Optional[str] = None,
+    reply_to_message_id: Optional[int] = None,
+    topic_id: Optional[int] = None,
+    file_name: Optional[str] = None,
+    file_size: Optional[int] = None,
+    pinned: bool = False,
 ) -> None:
     conn = get_connection()
     conn.execute(
         """
-        INSERT OR IGNORE INTO messages
+        INSERT INTO messages
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
-             date_unix, text, media_type, file_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             date_unix, text, media_type, file_path, media_duration, media_group_id,
+             is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author,
+             reply_to_message_id, topic_id, file_name, file_size, pinned)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id, message_id) DO UPDATE SET
+            topic_id = excluded.topic_id,
+            reply_to_message_id = excluded.reply_to_message_id,
+            file_name = COALESCE(excluded.file_name, messages.file_name),
+            file_size = COALESCE(excluded.file_size, messages.file_size),
+            pinned = excluded.pinned
         """,
         (
             chat_id,
@@ -168,16 +404,35 @@ def insert_message(
             text,
             media_type,
             file_path,
+            media_duration,
+            media_group_id,
+            int(is_forward),
+            fwd_from_chat_id,
+            fwd_from_msg_id,
+            fwd_from_date,
+            fwd_from_author,
+            reply_to_message_id,
+            topic_id,
+            file_name,
+            file_size,
+            int(bool(pinned)),
         ),
     )
 
 
-def update_message_file_path(chat_id: int, message_id: int, file_path: str) -> None:
-    """Used when media downloads finish after the row was already inserted."""
+def update_message_file_path(
+    chat_id: int, message_id: int, file_path: Optional[str],
+    file_name: Optional[str] = None, file_size: Optional[int] = None,
+) -> None:
+    """Set a message's media path; pass ``None`` to clear a stale link.
+
+    Optionally records the original filename/size (e.g. for documents).
+    """
     conn = get_connection()
     conn.execute(
-        "UPDATE messages SET file_path = ? WHERE chat_id = ? AND message_id = ?",
-        (file_path, chat_id, message_id),
+        "UPDATE messages SET file_path = ?, file_name = COALESCE(?, file_name), "
+        "file_size = COALESCE(?, file_size) WHERE chat_id = ? AND message_id = ?",
+        (file_path, file_name, file_size, chat_id, message_id),
     )
 
 
@@ -218,7 +473,9 @@ def save_message_snapshot(chat_id: int, message_id: int) -> None:
     """Save the current state of a message before it gets edited/deleted."""
     conn = get_connection()
     row = conn.execute(
-        "SELECT chat_id, message_id, sender_id, sender_name, is_outgoing, date_unix, text, media_type, file_path "
+        "SELECT chat_id, message_id, sender_id, sender_name, is_outgoing, date_unix, text, media_type, file_path, "
+        "is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author, "
+        "is_deleted, deleted_at_unix "
         "FROM messages WHERE chat_id = ? AND message_id = ?",
         (chat_id, message_id),
     ).fetchone()
@@ -229,8 +486,11 @@ def save_message_snapshot(chat_id: int, message_id: int) -> None:
         """
         INSERT OR REPLACE INTO message_snapshot
             (chat_id, message_id, sender_id, sender_name, is_outgoing,
-             date_unix, text, media_type, file_path, snapshot_at_unix)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             date_unix, text, media_type, file_path,
+             is_forward, fwd_from_chat_id, fwd_from_msg_id, fwd_from_date, fwd_from_author,
+             is_deleted, deleted_at_unix,
+             snapshot_at_unix)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (*row, int(time.time())),
     )
@@ -248,7 +508,12 @@ def record_edit(chat_id: int, message_id: int, old_text: str | None, new_text: s
 
 
 def record_deletion(chat_id: int, message_id: int) -> None:
-    """Record that a message was deleted, saving its last known state."""
+    """Record that a message was deleted, saving its last known state.
+
+    The message row is kept in the ``messages`` table but marked as
+    ``is_deleted = 1`` so the UI can show a "deleted" placeholder
+    instead of removing the message entirely.
+    """
     import time
     conn = get_connection()
     now = int(time.time())
@@ -270,6 +535,11 @@ def record_deletion(chat_id: int, message_id: int) -> None:
             "VALUES (?, ?, ?)",
             (chat_id, message_id, now),
         )
+    conn.execute(
+        "UPDATE messages SET is_deleted = 1, deleted_at_unix = ? "
+        "WHERE chat_id = ? AND message_id = ?",
+        (now, chat_id, message_id),
+    )
 
 
 def update_message_text(chat_id: int, message_id: int, text: str | None, sender_name: str | None = None) -> None:
@@ -285,15 +555,6 @@ def update_message_text(chat_id: int, message_id: int, text: str | None, sender_
             "UPDATE messages SET text = ? WHERE chat_id = ? AND message_id = ?",
             (text, chat_id, message_id),
         )
-
-
-def delete_message(chat_id: int, message_id: int) -> None:
-    """Remove a message from the messages table after it's been deleted."""
-    conn = get_connection()
-    conn.execute(
-        "DELETE FROM messages WHERE chat_id = ? AND message_id = ?",
-        (chat_id, message_id),
-    )
 
 
 def get_edits(chat_id: int, message_id: int) -> list[dict]:
@@ -333,7 +594,7 @@ def get_changes_since(unix: int) -> dict:
         (unix,),
     ).fetchall()
     deletions = conn.execute(
-        "SELECT chat_id, message_id, deleted_at_unix, old_text, old_sender_name "
+        "SELECT chat_id, message_id, deleted_at_unix, old_text, old_sender_name, old_media_type "
         "FROM message_deleted WHERE deleted_at_unix > ? ORDER BY deleted_at_unix",
         (unix,),
     ).fetchall()
@@ -343,7 +604,7 @@ def get_changes_since(unix: int) -> dict:
             for e in edits
         ],
         "deletions": [
-            {"chat_id": d[0], "message_id": d[1], "deleted_at_unix": d[2], "old_text": d[3], "old_sender_name": d[4]}
+            {"chat_id": d[0], "message_id": d[1], "deleted_at_unix": d[2], "old_text": d[3], "old_sender_name": d[4], "old_media_type": d[5]}
             for d in deletions
         ],
     }
